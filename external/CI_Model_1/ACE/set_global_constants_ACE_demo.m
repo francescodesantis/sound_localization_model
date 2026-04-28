@@ -1,0 +1,161 @@
+function CIParams = set_global_constants_ACE_demo(CIParams)
+
+% Contents of the struct CIParams:
+% FS   = [];          % sampling frequency
+% NFFT = [];          % fft length
+% W = [];             % hanning window
+% G = [];             % weights of the ACE filterbank
+% NUMOFCHANNELS = []; % number of channels
+% Q_SUM = [];         % weights to summarize FFT-bins
+% Tlevel = [];        % threshold level
+% Clevel = [];        % comfortable level
+% indexOrg = [];      
+% pps = [];           % stimulation rate in pulses per second
+% maxima = [];        % maximal number of electrodes in n-of-m strategy
+% Tph = [];           % Duration of the phase of a pulse
+% ipg = [];           % Inter-phase-gap
+% vActiveElectrodes = [];  %assortment of active electrodes
+
+if nargin < 1 % Create Struct if there is no input
+    CIParams = struct;
+end
+
+%% Parameters of the CI signal processing
+% Each Parameter is checked, if it exists or not. In this way you can quickly 
+% change just one Parameter by setting it outside of
+% ACE_signal_processing.m and thus quickly examine e.g. different PPS-Rates
+% MAP-T-Levels (in microvolt, denotes hearing threshold with CI) 
+if ~isfield(CIParams, 'TCL')
+    CIParams.TCL    = [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]';
+else
+    warning('set_global_constants_ACE_demo.m tried to specify new CIParams.TCL. Choosing already specified CIParams.TCL.')
+end
+% MAP-C-Levels (in microvolt, denotes maximum loudness threshold with CI)
+if ~isfield(CIParams, 'MCL')
+CIParams.MCL    = [200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200]';
+end
+% CIParams.Vol    = 1.0; % BW: This parameter is not needed in the ACE-Simulation. I think it is the Volume-Control of the Nucleus CIs. 
+                       % This is how it works: The CI-Patient can control
+                       % the upper m-Level over a certain range. Usually
+                       % this means that the complete mapped CL-Range
+                       % (MCL-THL) is divided in e.g. 80% fix und 20 %
+                       % dynamic controlled by the Volume-setting. Thus the
+                       % CI-Patient can lower the Loudness of the CI by
+                       % 20%. 
+if ~isfield(CIParams, 'Tph')
+CIParams.Tph    = 25e-6; % rectangular pulse phase duration [s]
+end
+if ~isfield(CIParams, 'ipg')
+CIParams.ipg    =  8e-6;         % interphase gap between up- and down rectangular pulse path
+end
+if ~isfield(CIParams, 'T_SPL')
+CIParams.T_SPL  = 25.0;			% The dB SPL Value, which is mapped to the T-Value [threshold db SPL] 
+end
+if ~isfield(CIParams, 'C_SPL')
+CIParams.C_SPL  = 65.0;			% The dB SPL Value, which is mapped to the C-Value [maximum loudness db SPL]
+end
+if ~isfield(CIParams, 'FS_ACE')
+CIParams.FS_ACE = 16000;		% Sampling rate of the ACE-Processing (Fs from digital sampling of the microphone or fs from the output of the filterbank?)
+end
+if ~isfield(CIParams, 'NFFT')
+CIParams.NFFT = 128; % Sets the number of fft-bins for analysis window
+end
+if ~isfield(CIParams, 'pps')
+CIParams.pps = 900; % Sets the pulses-per-second rate of the Cochlea Implant
+end
+if ~isfield(CIParams, 'maxima')
+CIParams.maxima = 8; % maximal number of electrodes in n-of-m strategy
+end
+if ~isfield(CIParams, 'NumOfChannels')
+CIParams.NumOfChannels = 22; % Number of Channels
+end
+if ~isfield(CIParams, 'vActiveElectrodes')
+CIParams.vActiveElectrodes = (CIParams.NumOfChannels:-1:1)'; % Vector which contains the numbers of the active electrodes after processing. Initialized with all possible Electrodenumbers. 
+end
+if ~isfield(CIParams, 'NUMOFCHANNELS')
+% number of channels
+CIParams.NUMOFCHANNELS = length(CIParams.vActiveElectrodes(~isnan(CIParams.vActiveElectrodes))); % BW: Not sure why this is needed. Might allow "disabled" CI-Electrodes by placing "nan" in vActiveElectrodes? 
+end
+if ~isfield(CIParams, 'indexOrg')
+CIParams.indexOrg = 2; 
+end
+if ~isfield(CIParams, 'Q')
+CIParams.Q = []; % Information on how to sum up the frequency bins
+end
+if ~isfield(CIParams, 'W')
+CIParams.W    = generate_hanning_window(CIParams.NFFT);
+end
+if ~isfield(CIParams, 'G')
+CIParams.G = []; % Weights of the ACE Filterbank
+% calculate the weights for the fft 
+W1 = abs(fft(CIParams.W));
+W2 = abs(fft([CIParams.W;zeros(CIParams.NFFT,1)]));  % for G(2), which is derive from W(0.5)
+
+CIParams.G(1) = 2/W1(1);                 % for channels with 1 bin
+CIParams.G(2) = 2/(sqrt(2)*W2(2));       % for channels with 2 bins
+CIParams.G(3) = 2/78.38;                 % for channels with more than 2 bins.
+clear W1;
+clear W2;
+end
+
+
+
+%compression characteristics
+if ~isfield(CIParams, 'B')
+CIParams.B = 0.0156; %base level
+end
+if ~isfield(CIParams, 'M')
+CIParams.M = 0.5859; %saturation level
+end
+if ~isfield(CIParams, 'alpha_c')
+CIParams.alpha_c = 415.96; % controls the steepness of the compression function
+end
+
+vGain             = zeros(size(CIParams.vActiveElectrodes));
+if ~isfield(CIParams, 'vLowerFreq')
+CIParams.vLowerFreq = [ 188  313  438  563  688  813  938 1063 1188 1313 1563 1813 2063 2313 2688 3063 3563 4063 4688 5313 6063 6938]';
+end
+if ~isfield(CIParams, 'vUpperFreq')
+CIParams.vUpperFreq = [ 313  438  563  688  813  938 1063 1188 1313 1563 1813 2063 2313 2688 3063 3563 4063 4688 5313 6063 6938 7938]';
+end
+
+if ~isfield(CIParams, 'Q_SUM')
+% information, how to sum up the frequency bins (num. f-Bins in table
+% below)
+CIParams.Q_SUM = [  ones(9,1); ...   
+         2*ones(4,1); ...
+         3*ones(2,1); ...
+         4*ones(2,1); ...
+         5*ones(2,1); 
+         6;7;8];
+end
+% Information about the filterbank. 
+% Chn.No. | num. f-Bins | fc, low bin | fc, upp bin  
+%      1  |           1 |         250 |         250
+%      2  |           1 |         375 |         375
+%      3  |           1 |         500 |         500
+%      4  |           1 |         625 |         625
+%      5  |           1 |         750 |         750
+%      6  |           1 |         875 |         875
+%      7  |           1 |        1000 |        1000
+%      8  |           1 |        1125 |        1125
+%      9  |           1 |        1250 |        1250
+%     10  |           2 |        1375 |        1500
+%     11  |           2 |        1625 |        1750
+%     12  |           2 |        1875 |        2000
+%     13  |           2 |        2125 |        2250
+%     14  |           3 |        2375 |        2625
+%     15  |           3 |        2750 |        3000
+%     16  |           4 |        3125 |        3500
+%     17  |           4 |        3625 |        4000
+%     18  |           5 |        4125 |        4625
+%     19  |           5 |        4750 |        5250
+%     20  |           6 |        5375 |        6000
+%     21  |           7 |        6125 |        6875
+%     22  |           8 |        7000 |        8000
+
+if ~isfield(CIParams, 'display_biphasic_pulses')
+% display of biphasic pulses
+CIParams.display_biphasic_pulses =1;% 1;
+
+end

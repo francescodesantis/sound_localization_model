@@ -1,0 +1,34 @@
+Reproduce
+	Forward masking: Titel der Kurven nicht verständlich -> treffende Bezeichnungen nehmen!
+
+ECAP
+	Recovery: Achsenbeschriftung und Titel fehlen
+		  Fehlermeldung an völlig unterschiedlichen Stellen (manchmal am Anfang, manchmal kurz vor Ende):
+		  	Attempted to access (167,Inf); index must be a positive integer or logical.
+
+			Error in APtimes2logic (line 19)
+		        logicANpattern(APvec(iCounter,1),timeindex) = 1;
+
+			Error in ECAP (line 54)
+			logicANpattern = APtimes2logic(APvec,ANParams.N_nervecells,FS);
+
+			Error in ECAP_recovery (line 28)
+		        ECAP_amplitude_test = ECAP(Iamp, i_el, Tph, FS);
+
+			Error in testCImodel>pushbutton_ECAP_Recovery_Callback (line 276)
+			ECAP_recovery;
+
+			Error in gui_mainfcn (line 95)
+		        feval(varargin{:});
+
+			Error in testCImodel (line 42)
+			    gui_mainfcn(gui_State, varargin{:});
+
+			Error in @(hObject,eventdata)testCImodel('pushbutton_ECAP_Recovery_Callback',hObject,eventdata,guidata(hObject))
+ 
+			Error while evaluating UIControl Callback
+Auditory Nerve Model
+	olnoise.wav: Out of Memory bei jedem Parameter File
+	Verbesserung: Play Button um sich die Wave anhören zu können!
+
+GUI: Grundsätzlich sollten die Buttons und die Felder gleich groß sein und könnten besser aufgeteilt werden.
