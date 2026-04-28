@@ -1764,8 +1764,8 @@ def plot_sound(
         ax.plot(t, wave[:, 0], color = color, linewidth=0.8)
     # stereo
     else:
-        for ch in range(wave.shape[1]):
-            ax.plot(t, wave[:, ch], linewidth=0.8, label=f"Ch {ch}")
+        ax.plot(t, wave[:, 0], linewidth=0.8, label=f"left", color='m')
+        ax.plot(t, wave[:, 1], linewidth=0.8, label=f"right", color='g')
         ax.legend()
 
     ax.set_xlabel(xlabel)
@@ -1792,9 +1792,10 @@ def draw_spikes_and_psth_bothside(
     f_ticks=[125, 1000, 10000],
     title=None,
     xlim=None,
-    ylim=None,
+    center_cf=None,
+    bw_neurons=None,
     bin_size=1,
-    hist_rate = False,
+    hist_rate=False,
     cf_bin_size=3,
     raster_dot_size=1,
     figsize=(14, 18)
@@ -1805,8 +1806,17 @@ def draw_spikes_and_psth_bothside(
     duration = res.get("simulation_time", res["sounds"]["base_sound"].sound.duration / b2.ms)
     if xlim is None:
         xlim = [0, duration]
-    if ylim is None:
-        ylim = [CFMIN/Hz, CFMAX/Hz]
+
+    # Build ylim from center_cf + bw_neurons, or default to full range
+    if center_cf is not None and bw_neurons is not None:
+        _n_tmp = len(res["angle_to_rate"][angle]["L"][pop]["global_ids"])
+        _cf_tmp = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n_tmp) / b2.Hz
+        _, center_idx = take_closest(_cf_tmp, center_cf)
+        low_idx  = max(0, center_idx - bw_neurons)
+        high_idx = min(_n_tmp - 1, center_idx + bw_neurons)
+        ylim = [_cf_tmp[low_idx], _cf_tmp[high_idx]]
+    else:
+        ylim = [CFMIN / Hz, CFMAX / Hz]
 
     L_hrtf_sound = res["sounds"]["l_hrtf_sounds"][angle]
     R_hrtf_sound = res["sounds"]["r_hrtf_sounds"][angle]
@@ -1979,12 +1989,13 @@ def draw_spikes_and_psth_bothside(
         )
 
         if hist_rate:
-            grouped_values = (grouped_counts/xlim[1]) * 1000.0 / cf_bin_size
+            grouped_values = (grouped_counts / xlim[1]) * 1000.0 / cf_bin_size
             avg_value = grouped_values.mean()
             print(f"Avg firing rate ({side} side): {avg_value:.2f} Hz POP")
             xlabel = "Avg Firing rate [Hz]"
         else:
             grouped_values = grouped_counts
+            avg_value = grouped_values.mean()
             xlabel = "Spike count"
 
         ax_hist.barh(grouped_y, grouped_values, height=bar_height,
@@ -2002,7 +2013,7 @@ def draw_spikes_and_psth_bothside(
         color = side_colors[side]
         spikes = res["angle_to_rate"][angle][side][pop]
 
-        times_f, _, _, _, _, _ = filter_spikes(spikes, xlim, ylim)
+        times_f, _, _, ymin_idx, ymax_idx, _ = filter_spikes(spikes, xlim, ylim)
 
         bins = np.arange(xlim[0], xlim[1] + bin_size, bin_size)
         counts, _ = np.histogram(times_f, bins=bins)
@@ -2017,8 +2028,11 @@ def draw_spikes_and_psth_bothside(
             ax_psth.hist(times_f, bins=bins, alpha=0.4, color=color, label=side)
 
     ax_psth.set_xlabel("Time [ms]")
-    ax_psth.set_ylabel(" Avg Firing rate [Hz]" if hist_rate else "Spike count")
+    ax_psth.set_ylabel("Avg Firing rate [Hz]" if hist_rate else "Spike count")
     ax_psth.legend()
+
+    if title:
+        fig.suptitle(title, fontsize=14, fontweight='bold')
 
 def draw_rate_vs_angle(
     data,
@@ -2026,10 +2040,10 @@ def draw_rate_vs_angle(
     rate=True,
     cf_interval=None,
     time_interval=None,       # [t_start, t_end] in ms
+    center_cf=None,           # NEW: central CF in Hz to define the band of interest
+    bw_neurons=None,          # NEW: half-bandwidth in number of neurons around center_cf
     sides=None,
     color=None,
-    show_hist=True,
-    hist_logscale=True,
     figsize=[7,4],
     title=None,
     ylim=None,
@@ -2045,6 +2059,10 @@ def draw_rate_vs_angle(
     - Adds SEM/STD error ONLY when multiple datasets are provided
     - time_interval: [t_start, t_end] in ms — restrict spike counting to this window
     - cf_interval:   [cf_min, cf_max] in Hz — restrict spike counting to this CF band
+    - center_cf:     central CF in Hz — combined with bw_neurons to define the CF band
+    - bw_neurons:    half-bandwidth in number of neurons around center_cf index.
+                     The resulting band [center_idx - bw_neurons, center_idx + bw_neurons]
+                     is converted to Hz and used as cf_interval (overrides cf_interval).
       Rate is always spikes / neuron_in_band / time_window (Hz).
     """
 
@@ -2064,6 +2082,30 @@ def draw_rate_vs_angle(
         else data["sounds"]["base_sound"].sound.duration / b2.ms
     )
     duration = data.get("simulation_time", default_duration) * b2.ms
+
+    # ------------------------------------------------------------------
+    # Resolve center_cf + bw_neurons → cf_interval
+    # Mirrors the same logic used in draw_spikes_and_psth_bothside.
+    # This overrides any explicitly passed cf_interval when both
+    # center_cf and bw_neurons are provided.
+    # ------------------------------------------------------------------
+    if center_cf is not None and bw_neurons is not None:
+        # Use the first available angle/side to get the global_ids length
+        _first_angle = list(angle_to_rate.keys())[0]
+        _n_tmp = len(angle_to_rate[_first_angle]["L"][pop if isinstance(pop, str) and pop != "all" else "LSO"]["global_ids"])
+        _cf_tmp = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n_tmp) / b2.Hz
+
+        _, center_idx = take_closest(_cf_tmp, center_cf)
+        low_idx  = max(0, center_idx - bw_neurons)
+        high_idx = min(_n_tmp - 1, center_idx + bw_neurons)
+
+        # Convert neuron index bounds back to Hz for cf_interval
+        cf_interval = [_cf_tmp[low_idx], _cf_tmp[high_idx]]
+        print(
+            f"[draw_rate_vs_angle] center_cf={center_cf} Hz → "
+            f"neuron idx [{low_idx}, {high_idx}] → "
+            f"cf_interval=[{cf_interval[0]:.1f}, {cf_interval[1]:.1f}] Hz"
+        )
 
     # ------------------------------------------------------------------
     # Helper: filter spikes by time window only.
@@ -2151,7 +2193,7 @@ def draw_rate_vs_angle(
                 sides_local,
                 angles,
                 dur_d,
-                cf_interval,  # always passed, never None-d out
+                cf_interval,  # always passed; may now be derived from center_cf+bw_neurons
             )
 
             for side in sides_local:
@@ -2216,43 +2258,6 @@ def draw_rate_vs_angle(
         else:
             raise ValueError("Invalid rate option.")
 
-        # Histogram
-        if show_hist:
-            v = ax.twinx()
-            v.grid(False)
-
-            distr = {
-                side: [
-                    firing_neurons_distribution(
-                        angle_to_rate[a][side][pop_name]
-                    )
-                    for a in angles
-                ]
-                for side in sides_local
-            }
-
-            senders_renamed = {
-                side: [
-                    shift_senders(
-                        angle_to_rate[a][side][pop_name], hist_logscale
-                    )
-                    for a in angles
-                ]
-                for side in sides_local
-            }
-
-            max_spikes_single = max(flatten(distr.values()))
-
-            draw_hist(
-                v,
-                senders_renamed,
-                angles,
-                num_neurons=len(
-                    angle_to_rate[angles[0]]["L"][pop_name]["global_ids"]
-                ),
-                max_spikes_single_neuron=max_spikes_single,
-                logscale=hist_logscale,
-            )
 
         # Plot
         if rate in ["diff", "max_norm"]:
@@ -2320,8 +2325,10 @@ def draw_rate_vs_angle(
         filter_parts = []
         if time_interval is not None:
             filter_parts.append(f"t=[{time_interval[0]},{time_interval[1]}] ms")
-        if cf_interval is not None:
-            filter_parts.append(f"CF=[{cf_interval[0]},{cf_interval[1]}] Hz")
+        if center_cf is not None and bw_neurons is not None:
+            filter_parts.append(f"CF={center_cf} Hz ±{bw_neurons} neurons")
+        elif cf_interval is not None:
+            filter_parts.append(f"CF=[{cf_interval[0]:.0f},{cf_interval[1]:.0f}] Hz")
         ax.set_title(
             base_title + ("  |  " + ", ".join(filter_parts) if filter_parts else "")
         )
@@ -2339,7 +2346,7 @@ def draw_rate_vs_angle(
         return ax
 
     # ---- ALL POPS ----
-    pops = ["SBC", "GBC", "LNTBC", "MNTBC", "MSO", "LSO"] if pop == "all" else list(pop)
+    pops = ["ANF","SBC", "GBC", "LNTBC", "MNTBC", "MSO", "LSO"] if pop == "all" else list(pop)
 
     n_rows = math.ceil(len(pops) / 3)
     fig, axes = plt.subplots(n_rows, 3, figsize=(18, 4 * n_rows))
@@ -2857,3 +2864,369 @@ def draw_multi_dataset_raw_rates(
     plt.show()
 
     return ax
+
+## Claude's SHIT
+
+def _filter_spikes_to_cf_window(spikes, center_cf=None, bw_neurons=None):
+    gids    = spikes["global_ids"]
+    times   = spikes["times"]
+    senders = spikes["senders"]
+    n       = len(gids)
+
+    if center_cf is None or bw_neurons is None:
+        return {"times": times, "senders": senders,
+                "global_ids": gids, "_n_window": n}
+
+    cf_hz = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, n) / b2.Hz
+    _, center_idx = take_closest(cf_hz, center_cf)
+    low_idx  = max(0, center_idx - bw_neurons)
+    high_idx = min(n - 1, center_idx + bw_neurons)
+
+    cf_min_id = gids[0] + low_idx
+    cf_max_id = gids[0] + high_idx
+    mask = (senders >= cf_min_id) & (senders <= cf_max_id)
+
+    return {"times": times[mask], "senders": senders[mask],
+            "global_ids": gids[low_idx : high_idx + 1],
+            "_n_window": high_idx - low_idx + 1}
+
+
+def _get_psth_rates(spikes, xlim_peak, bin_size,
+                    center_cf=None, bw_neurons=None,
+                    psth_filtering=False, stim_fs=None, smooth_cutoff_hz=None):
+    """
+    Compute PSTH rates and bin centres.
+    If psth_filtering=True, apply a zero-phase Butterworth low-pass:
+      - cutoff = smooth_cutoff_hz if provided
+      - else cutoff = 3 * stim_fs if stim_fs provided
+      - else raises ValueError
+    """
+    from scipy.signal import butter, filtfilt
+
+    spikes  = _filter_spikes_to_cf_window(spikes, center_cf, bw_neurons)
+    n       = spikes.get("_n_window", len(spikes["global_ids"]))
+
+    mask    = (spikes["times"] >= xlim_peak[0]) & (spikes["times"] <= xlim_peak[1])
+    times_f = spikes["times"][mask]
+
+    bins          = np.arange(xlim_peak[0], xlim_peak[1] + bin_size, bin_size)
+    counts, edges = np.histogram(times_f, bins=bins)
+    rates         = (counts * 1000.0) / (bin_size * n)
+    centres       = 0.5 * (edges[:-1] + edges[1:])
+
+    if psth_filtering:
+        fs_psth = 1000.0 / bin_size
+        nyq     = fs_psth / 2.0
+
+        if smooth_cutoff_hz is None:
+            if stim_fs is None:
+                raise ValueError(
+                    "psth_filtering=True requires either smooth_cutoff_hz or stim_fs."
+                )
+            smooth_cutoff_hz = 3.0 * stim_fs
+
+        if smooth_cutoff_hz >= nyq:
+            raise ValueError(
+                f"smooth_cutoff_hz={smooth_cutoff_hz:.1f} Hz >= Nyquist={nyq:.1f} Hz. "
+                f"Reduce bin_size or lower smooth_cutoff_hz."
+            )
+
+        b, a   = butter(N=4, Wn=smooth_cutoff_hz / nyq, btype='low')
+        rates  = filtfilt(b, a, rates)
+
+    return rates, centres
+
+
+def _get_sorted_peaks(rates, centres, bin_size, n_peaks=None, prominence=50.0):
+    """
+    Return peak times sorted chronologically.
+    Minimum spacing = 1/bin_size bins (1 ms). Minimum prominence filter applied.
+    If n_peaks is not None, return the first n chronologically.
+    """
+    from scipy.signal import find_peaks
+
+    peak_idxs, _ = find_peaks(
+        rates,
+        distance   = max(1, int(1.0 / bin_size)),
+        prominence = prominence,
+    )
+    if len(peak_idxs) == 0:
+        return np.array([]), np.array([])
+
+    top = sorted(peak_idxs)
+    if n_peaks is not None:
+        top = top[:n_peaks]
+
+    return centres[top], rates[top]
+
+
+def _onset_peak(rates, centres, bin_size, prominence=50.0):
+    """
+    Highest-amplitude peak among the first 5 chronological peaks.
+    """
+    times, ampls = _get_sorted_peaks(rates, centres, bin_size,
+                                      n_peaks=5, prominence=prominence)
+    if len(times) == 0:
+        return np.nan, np.nan
+    idx = np.argmax(ampls)
+    return times[idx], ampls[idx]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# METRIC COMPUTATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_metrics_for_angle(res, angle, pop,
+                               xlim_peak=(0, 20), bin_size=0.5,
+                               center_cf=None, bw_neurons=None,
+                               psth_filtering=False, stim_fs=None,
+                               smooth_cutoff_hz=None, prominence=50.0):
+    n_peaks_list = [2, 5, 10]
+    out = {}
+
+    psth_kwargs = dict(
+        xlim_peak        = xlim_peak,
+        bin_size         = bin_size,
+        center_cf        = center_cf,
+        bw_neurons       = bw_neurons,
+        psth_filtering   = psth_filtering,
+        stim_fs          = stim_fs,
+        smooth_cutoff_hz = smooth_cutoff_hz,
+    )
+
+    rates_L, centres_L = _get_psth_rates(
+        res["angle_to_rate"][angle]["L"][pop], **psth_kwargs)
+    rates_R, centres_R = _get_psth_rates(
+        res["angle_to_rate"][angle]["R"][pop], **psth_kwargs)
+
+    # ── onset peak ────────────────────────────────────────────────────────────
+    t_on_L, fr_on_L = _onset_peak(rates_L, centres_L, bin_size, prominence)
+    t_on_R, fr_on_R = _onset_peak(rates_R, centres_R, bin_size, prominence)
+
+    out["fr_onset_L"]    = fr_on_L
+    out["fr_onset_R"]    = fr_on_R
+    out["fr_onset_diff"] = fr_on_L - fr_on_R
+    out["t_onset_L"]     = t_on_L
+    out["t_onset_R"]     = t_on_R
+    out["t_onset_diff"]  = t_on_L - t_on_R
+
+    # ── period: exact from stimulus frequency, no estimation ─────────────────
+    if stim_fs is not None:
+        period = 1000.0 / stim_fs          # ms
+    else:
+        # fallback to IPI estimate if stim_fs not provided
+        all_t_L, _ = _get_sorted_peaks(rates_L, centres_L, bin_size, prominence=prominence)
+        all_t_R, _ = _get_sorted_peaks(rates_R, centres_R, bin_size, prominence=prominence)
+        ipi = []
+        if len(all_t_L) > 1: ipi.append(np.diff(all_t_L))
+        if len(all_t_R) > 1: ipi.append(np.diff(all_t_R))
+        period = np.mean(np.concatenate(ipi)) if ipi else np.nan
+    out["period"] = period
+
+    # ── phase: relative to onset peak, using exact period ────────────────────
+    # t_on gives the phase reference: the onset peak defines cycle position 0
+    # all subsequent peak times are expressed relative to that reference
+    if not np.isnan(period) and period > 0:
+        ph_on_L = ((t_on_L - t_on_L) % period) / period * 2 * np.pi   # always 0
+        ph_on_R = ((t_on_R - t_on_L) % period) / period * 2 * np.pi   # shift of R vs L onset
+        out["phase_onset_diff"] = (ph_on_L - ph_on_R + np.pi) % (2 * np.pi) - np.pi
+    else:
+        out["phase_onset_diff"] = np.nan
+
+    # ── multi-peak averages ───────────────────────────────────────────────────
+    for n in n_peaks_list:
+        t_L, fr_L = _get_sorted_peaks(rates_L, centres_L, bin_size,
+                                       n_peaks=n, prominence=prominence)
+        t_R, fr_R = _get_sorted_peaks(rates_R, centres_R, bin_size,
+                                       n_peaks=n, prominence=prominence)
+
+        avg_fr_L = fr_L.mean() if len(fr_L) else np.nan
+        avg_fr_R = fr_R.mean() if len(fr_R) else np.nan
+        out[f"fr_avg_{n}_L"]    = avg_fr_L
+        out[f"fr_avg_{n}_R"]    = avg_fr_R
+        out[f"fr_avg_{n}_diff"] = avg_fr_L - avg_fr_R
+
+        avg_t_L = t_L.mean() if len(t_L) else np.nan
+        avg_t_R = t_R.mean() if len(t_R) else np.nan
+        out[f"t_avg_{n}_L"]     = avg_t_L
+        out[f"t_avg_{n}_R"]     = avg_t_R
+        out[f"t_avg_{n}_diff"]  = avg_t_L - avg_t_R
+
+        if not np.isnan(period) and period > 0:
+            # phase of each peak relative to the L onset reference
+            ph_L = np.mean(((t_L - t_on_L) % period) / period * 2 * np.pi) if len(t_L) else np.nan
+            ph_R = np.mean(((t_R - t_on_L) % period) / period * 2 * np.pi) if len(t_R) else np.nan
+            out[f"phase_avg_{n}_diff"] = (ph_L - ph_R + np.pi) % (2 * np.pi) - np.pi
+        else:
+            out[f"phase_avg_{n}_diff"] = np.nan
+
+    return out
+
+def compute_lateralization_metrics(res, pop, angles,
+                                    xlim_peak=(0, 20), bin_size=0.5,
+                                    center_cf=None, bw_neurons=None,
+                                    psth_filtering=False, stim_fs=None,
+                                    smooth_cutoff_hz=None, prominence=50.0):
+    """Sweep angles and stack results into arrays."""
+    keys = None
+    rows = []
+    for angle in angles:
+        m = compute_metrics_for_angle(
+            res, angle, pop,
+            xlim_peak=xlim_peak, bin_size=bin_size,
+            center_cf=center_cf, bw_neurons=bw_neurons,
+            psth_filtering=psth_filtering, stim_fs=stim_fs,
+            smooth_cutoff_hz=smooth_cutoff_hz, prominence=prominence,
+        )
+        if keys is None:
+            keys = list(m.keys())
+        rows.append(m)
+
+    results = {"angles": np.array(angles)}
+    for k in keys:
+        results[k] = np.array([r[k] for r in rows])
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PLOTTING
+# ─────────────────────────────────────────────────────────────────────────────
+def plot_lateralization_metrics(metrics,
+                                 show_onset_only=False,
+                                 show_lr_on_onset=True):
+    angles       = metrics["angles"]
+    n_peaks_list = [2, 5, 10]
+    avg_styles   = {2: ('--', 'o'), 5: ('-.', 's'), 10: (':', '^')}
+    avg_colors   = {2: '#e07b00', 5: '#9400d3', 10: '#007090'}
+
+    fig, axes = plt.subplots(3, 1, figsize=(7, 15), sharex=True)
+
+    # ── Panel 0: FR difference ────────────────────────────────────────────────
+    ax = axes[0]
+    ax.plot(angles, metrics["fr_onset_diff"], 'o-', color='k',
+            linewidth=2, label="onset peak")
+    ax.axhline(0, color='gray', linestyle=':', linewidth=1)
+    ax.axvline(0, color='gray', linestyle=':', linewidth=1)
+    ax.set_ylabel("ΔFR  L−R  [Hz]")
+    ax.grid(True, alpha=0.3)
+    if not show_onset_only:
+        for n in n_peaks_list:
+            ls, mk = avg_styles[n]
+            ax.plot(angles, metrics[f"fr_avg_{n}_diff"],
+                    linestyle=ls, marker=mk, color=avg_colors[n],
+                    linewidth=1.5, label=f"avg first {n} peaks")
+    if show_onset_only and show_lr_on_onset:
+        ax2 = ax.twinx()
+        ax2.plot(angles, metrics["fr_onset_L"], 's--', color='m',
+                 linewidth=1.5, alpha=0.7, label="L onset FR")
+        ax2.plot(angles, metrics["fr_onset_R"], 's--', color='g',
+                 linewidth=1.5, alpha=0.7, label="R onset FR")
+        ax2.set_ylabel("Individual FR [Hz]", color='gray')
+        ax2.tick_params(axis='y', labelcolor='gray')
+        ax2.legend()
+    ax.legend()
+
+    # ── Panel 1: Timing difference ────────────────────────────────────────────
+    ax = axes[1]
+    ax.plot(angles, metrics["t_onset_diff"], 'o-', color='k',
+            linewidth=2, label="onset peak")
+    ax.axhline(0, color='gray', linestyle=':', linewidth=1)
+    ax.axvline(0, color='gray', linestyle=':', linewidth=1)
+    ax.set_ylabel("Δt  L−R  [ms]")
+    ax.grid(True, alpha=0.3)
+    if not show_onset_only:
+        for n in n_peaks_list:
+            ls, mk = avg_styles[n]
+            ax.plot(angles, metrics[f"t_avg_{n}_diff"],
+                    linestyle=ls, marker=mk, color=avg_colors[n],
+                    linewidth=1.5, label=f"avg first {n} peaks")
+    ax.legend()
+
+    # ── Panel 2: Phase difference ─────────────────────────────────────────────
+    ax = axes[2]
+    phase_onset_deg = np.degrees(metrics["phase_onset_diff"])
+    ax.plot(angles, phase_onset_deg, 'o-', color='k',
+            linewidth=2, label="onset peak")
+    ax.axhline(0, color='gray', linestyle=':', linewidth=1)
+    ax.axvline(0, color='gray', linestyle=':', linewidth=1)
+    ax.set_ylabel("ΔPhase  L−R  [deg]")
+    ax.grid(True, alpha=0.3)
+    if not show_onset_only:
+        for n in n_peaks_list:
+            ls, mk = avg_styles[n]
+            phase_avg_deg = np.degrees(metrics[f"phase_avg_{n}_diff"])
+            ax.plot(angles, phase_avg_deg,
+                    linestyle=ls, marker=mk, color=avg_colors[n],
+                    linewidth=1.5, label=f"avg first {n} peaks")
+    ax.legend()
+    ax.set_xticks(angles)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_psth_per_angle(res, pop, angles,
+                         xlim_peak=(0, 20), bin_size=0.5,
+                         center_cf=None, bw_neurons=None,
+                         show_onset_only=False,
+                         psth_filtering=False, stim_fs=None,
+                         smooth_cutoff_hz=None, prominence=20.0):
+    n_angles = len(angles)
+    n_cols   = 1
+    n_rows   = int(np.ceil(n_angles / n_cols))
+
+    fig, axes = plt.subplots(n_rows, n_cols,
+                              figsize=(7 * n_cols, 4 * n_rows),
+                              sharex=True, sharey=False)
+    axes_flat = axes.flatten()
+
+    psth_kwargs = dict(
+        xlim_peak        = xlim_peak,
+        bin_size         = bin_size,
+        center_cf        = center_cf,
+        bw_neurons       = bw_neurons,
+        psth_filtering   = psth_filtering,
+        stim_fs          = stim_fs,
+        smooth_cutoff_hz = smooth_cutoff_hz,
+    )
+
+    side_colors = {'L': 'm', 'R': 'g'}
+
+    for ax_idx, angle in enumerate(angles):
+        ax = axes_flat[ax_idx]
+
+        for side, color in side_colors.items():
+            spikes = res["angle_to_rate"][angle][side][pop]
+            rates, centres = _get_psth_rates(spikes, **psth_kwargs)
+
+            ax.plot(centres, rates, color=color, alpha=0.8,
+                    linewidth=1.5, label=side)
+
+            if show_onset_only:
+                t_on, fr_on = _onset_peak(rates, centres, bin_size, prominence)
+                if not np.isnan(t_on):
+                    ax.plot(t_on, fr_on, 'o', color='red',
+                            markerfacecolor='none', markeredgewidth=2, zorder=5)
+            else:
+                t_peaks, fr_peaks = _get_sorted_peaks(rates, centres, bin_size,
+                                                       prominence=prominence)
+                if len(t_peaks):
+                    ax.plot(t_peaks, fr_peaks, 'o', color='red',
+                            markerfacecolor='none', markeredgewidth=2, zorder=5)
+
+                # overplot onset peak in a distinct colour on top
+                t_on, fr_on = _onset_peak(rates, centres, bin_size, prominence)
+                if not np.isnan(t_on):
+                    ax.plot(t_on, fr_on, 'o', color='blue',
+                            markerfacecolor='none', markeredgewidth=2.5, zorder=6)
+
+        ax.set_xlabel("Time [ms]")
+        ax.set_ylabel("FR [Hz]")
+        ax.set_title(f"{angle}°")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+    for ax_idx in range(n_angles, len(axes_flat)):
+        axes_flat[ax_idx].set_visible(False)
+
+    plt.tight_layout()
+    plt.show()
