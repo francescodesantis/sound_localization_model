@@ -193,6 +193,45 @@ class Click_Train:
         self.sound = train
         self.number = n
 
+class DualTone:
+    """Sum of two pure tones, each with independent frequency and level."""
+
+    sound: b2h.Sound
+
+    def __init__(
+        self,
+        frequency1: b2.Quantity,
+        frequency2: b2.Quantity,
+        duration=DEFAULT_SOUND_DURATION,
+        level1=None,
+        level2=None,
+        ramp_ms: float = 10.0,
+        offset_silence_duration=0 * b2.ms,
+        **kwargs,
+    ):
+        self.frequency1 = frequency1
+        self.frequency2 = frequency2
+
+        tone1 = b2h.Sound.tone(frequency1, duration, **kwargs)
+        tone2 = b2h.Sound.tone(frequency2, duration, **kwargs)
+
+        if level1 is not None:
+            tone1.level = level1
+        if level2 is not None:
+            tone2.level = level2
+
+        # Sum the two tones
+        combined = b2h.Sound(
+            np.array(tone1.data) + np.array(tone2.data),
+            samplerate=tone1.samplerate
+        )
+
+        self.sound = gate_and_append_silence(
+            combined,
+            ramp_ms=ramp_ms,
+            offset_silence_duration=offset_silence_duration,
+        )
+
 class ToneFromAngle(Tone):
     # x = ToneFromAngle(20, 20 * b2.Hz)
     angle: int
