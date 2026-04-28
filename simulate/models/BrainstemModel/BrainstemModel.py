@@ -170,27 +170,6 @@ class BrainstemModel(SpikingModel):
                 },
             )
 
-            # ------------------------------------------------------
-            # SPN (offset detector)
-            # ------------------------------------------------------
-            self.pops[side]["SPN"] = nest.Create(
-                "iaf_cond_beta",
-                P.POP_NUM.n_SPNs,
-                params={
-                    "C_m": P.MEMB_CAPS.SPN,
-                    "g_L": P.G_LEAK.SPN,
-                    "E_L": P.E_L.SPN,                                
-                    "V_reset": P.V_RESET.SPN,
-                    "V_th": P.V_TH.SPN,           
-                    "t_ref": P.T_REF.SPN,         
-                    "E_ex": P.EXC_REV.SPN,              
-                    "E_in": P.INH_REV.SPN,
-                    "tau_rise_ex": P.TAUS_EX_RISE.SPN,
-                    "tau_decay_ex": P.TAUS_EX_DECAY.SPN,
-                    "tau_rise_in": P.TAUS_IN_RISE.SPN,
-                    "tau_decay_in": P.TAUS_IN_DECAY.SPN,    
-                },
-            )
                 
         for side in ["L", "R"]:
             for pop in self.pops[side].keys():
@@ -414,23 +393,6 @@ class BrainstemModel(SpikingModel):
             num_sources=P.POP_CONV.MNTBCs2LSOs, 
         )
 
-        connect(
-            self.pops["R"]["MNTBC"],
-            self.pops["R"]["SPN"],
-            "x_to_one",
-            syn_spec={"weight": P.SYN_WEIGHTS.MNTBCs2SPN,
-                       "delay": P.SYN_DELAYS.MNTBCs2SPN},
-            num_sources=P.POP_CONV.MNTBCs2SPNs, 
-        )
-
-        connect(
-            self.pops["L"]["MNTBC"],
-            self.pops["L"]["SPN"],
-            "x_to_one",
-            syn_spec={"weight": P.SYN_WEIGHTS.MNTBCs2SPN,
-                       "delay": P.SYN_DELAYS.MNTBCs2SPN},
-            num_sources=P.POP_CONV.MNTBCs2SPNs, 
-        )
 
     def simulate(self, time: Union[float, int]):
         # split in time chunks

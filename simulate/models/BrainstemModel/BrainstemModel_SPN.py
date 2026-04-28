@@ -52,6 +52,18 @@ class BrainstemModel(SpikingModel):
             self.pops[side]["SBC"] = nest.Create(
                 "iaf_cond_beta",
                 P.POP_NUM.n_SBCs,
+                params={
+                    "C_m": P.MEMB_CAPS.SBC,
+                    "g_L": P.G_LEAK.SBC,
+                    "E_L": P.E_L.SBC,                                
+                    "V_reset": P.V_RESET.SBC,
+                    "V_th": P.V_TH.SBC,           
+                    "t_ref": P.T_REF.SBC,         
+                    "E_ex": P.EXC_REV.SBC,              
+                    "E_in": P.INH_REV.SBC,
+                    "tau_rise_ex": P.TAUS_EX_RISE.SBC,
+                    "tau_decay_ex": P.TAUS_EX_DECAY.SBC,      
+                },
             )
 
             # ------------------------------------------------------
@@ -60,6 +72,18 @@ class BrainstemModel(SpikingModel):
             self.pops[side]["GBC"] = nest.Create(
                 "iaf_cond_beta",
                 P.POP_NUM.n_GBCs,
+                params={
+                    "C_m": P.MEMB_CAPS.GBC,
+                    "g_L": P.G_LEAK.GBC,
+                    "E_L": P.E_L.GBC,                                
+                    "V_reset": P.V_RESET.GBC,
+                    "V_th": P.V_TH.GBC,           
+                    "t_ref": P.T_REF.GBC,         
+                    "E_ex": P.EXC_REV.GBC,              
+                    "E_in": P.INH_REV.GBC,
+                    "tau_rise_ex": P.TAUS_EX_RISE.GBC,
+                    "tau_decay_ex": P.TAUS_EX_DECAY.GBC,    
+                },
             )
 
             # ------------------------------------------------------
@@ -67,7 +91,19 @@ class BrainstemModel(SpikingModel):
             # ------------------------------------------------------
             self.pops[side]["LNTBC"] = nest.Create(
                 "iaf_cond_beta",
-                P.POP_NUM.n_LNTBCs
+                P.POP_NUM.n_LNTBCs,
+                params={
+                    "C_m": P.MEMB_CAPS.LNTBC,
+                    "g_L": P.G_LEAK.LNTBC,
+                    "E_L": P.E_L.LNTBC,                                
+                    "V_reset": P.V_RESET.LNTBC,
+                    "V_th": P.V_TH.LNTBC,           
+                    "t_ref": P.T_REF.LNTBC,         
+                    "E_ex": P.EXC_REV.LNTBC,              
+                    "E_in": P.INH_REV.LNTBC,
+                    "tau_rise_ex": P.TAUS_EX_RISE.LNTBC,
+                    "tau_decay_ex": P.TAUS_EX_DECAY.LNTBC,    
+                },
             )
 
             # ------------------------------------------------------
@@ -75,7 +111,19 @@ class BrainstemModel(SpikingModel):
             # ------------------------------------------------------
             self.pops[side]["MNTBC"] = nest.Create(
                 "iaf_cond_beta",
-                P.POP_NUM.n_MNTBCs
+                P.POP_NUM.n_MNTBCs,
+                params={
+                    "C_m": P.MEMB_CAPS.MNTBC,
+                    "g_L": P.G_LEAK.MNTBC,
+                    "E_L": P.E_L.MNTBC,                                
+                    "V_reset": P.V_RESET.MNTBC,
+                    "V_th": P.V_TH.MNTBC,           
+                    "t_ref": P.T_REF.MNTBC,         
+                    "E_ex": P.EXC_REV.MNTBC,              
+                    "E_in": P.INH_REV.MNTBC,
+                    "tau_rise_ex": P.TAUS_EX_RISE.MNTBC,
+                    "tau_decay_ex": P.TAUS_EX_DECAY.MNTBC,  
+                },
             )
 
             # ------------------------------------------------------
@@ -84,6 +132,20 @@ class BrainstemModel(SpikingModel):
             self.pops[side]["MSO"] = nest.Create(
                 "iaf_cond_beta",
                 P.POP_NUM.n_MSOs,
+                params={
+                    "C_m": P.MEMB_CAPS.MSO,
+                    "g_L": P.G_LEAK.MSO,
+                    "E_L": P.E_L.MSO,                                
+                    "V_reset": P.V_RESET.MSO,
+                    "V_th": P.V_TH.MSO,           
+                    "t_ref": P.T_REF.MSO,         
+                    "E_ex": P.EXC_REV.MSO,              
+                    "E_in": P.INH_REV.MSO,
+                    "tau_rise_ex": P.TAUS_EX_RISE.MSO,
+                    "tau_decay_ex": P.TAUS_EX_DECAY.MSO,
+                    "tau_rise_in": P.TAUS_IN_RISE.MSO,
+                    "tau_decay_in": P.TAUS_IN_DECAY.MSO,    
+                },
             )
 
             # ------------------------------------------------------
@@ -91,7 +153,21 @@ class BrainstemModel(SpikingModel):
             # ------------------------------------------------------
             self.pops[side]["LSO"] = nest.Create(
                 "iaf_cond_beta",
-                P.POP_NUM.n_LSOs
+                P.POP_NUM.n_LSOs,
+                params={
+                    "C_m": P.MEMB_CAPS.LSO,
+                    "g_L": P.G_LEAK.LSO,
+                    "E_L": P.E_L.LSO,                                
+                    "V_reset": P.V_RESET.LSO,
+                    "V_th": P.V_TH.LSO,           
+                    "t_ref": P.T_REF.LSO,         
+                    "E_ex": P.EXC_REV.LSO,              
+                    "E_in": P.INH_REV.LSO,
+                    "tau_rise_ex": P.TAUS_EX_RISE.LSO,
+                    "tau_decay_ex": P.TAUS_EX_DECAY.LSO,
+                    "tau_rise_in": P.TAUS_IN_RISE.LSO,
+                    "tau_decay_in": P.TAUS_IN_DECAY.LSO,    
+                },
             )
 
             # ------------------------------------------------------
@@ -100,6 +176,20 @@ class BrainstemModel(SpikingModel):
             self.pops[side]["SPN"] = nest.Create(
                 "iaf_cond_beta",
                 P.POP_NUM.n_SPNs,
+                params={
+                    "C_m": P.MEMB_CAPS.SPN,
+                    "g_L": P.G_LEAK.SPN,
+                    "E_L": P.E_L.SPN,                                
+                    "V_reset": P.V_RESET.SPN,
+                    "V_th": P.V_TH.SPN,           
+                    "t_ref": P.T_REF.SPN,         
+                    "E_ex": P.EXC_REV.SPN,              
+                    "E_in": P.INH_REV.SPN,
+                    "tau_rise_ex": P.TAUS_EX_RISE.SPN,
+                    "tau_decay_ex": P.TAUS_EX_DECAY.SPN,
+                    "tau_rise_in": P.TAUS_IN_RISE.SPN,
+                    "tau_decay_in": P.TAUS_IN_DECAY.SPN,    
+                },
             )
                 
         for side in ["L", "R"]:
@@ -248,7 +338,7 @@ class BrainstemModel(SpikingModel):
             "x_to_one",
             syn_spec={
                 "weight": P.SYN_WEIGHTS.LNTBCs2MSO,
-                "delay": P.SYN_DELAYS.LNTBCs2MSOipsi,
+                "delay": P.SYN_DELAYS.LNTBCs2MSO,
             },
             num_sources=P.POP_CONV.LNTBCs2MSOs,
         )
@@ -259,7 +349,7 @@ class BrainstemModel(SpikingModel):
             "x_to_one",
             syn_spec={
                 "weight": P.SYN_WEIGHTS.MNTBCs2MSO,
-                "delay": P.SYN_DELAYS.MNTBCs2MSOcontra,
+                "delay": P.SYN_DELAYS.MNTBCs2MSO,
             },
             num_sources=P.POP_CONV.MNTBCs2MSOs,
         )
@@ -270,7 +360,7 @@ class BrainstemModel(SpikingModel):
             "x_to_one",
             syn_spec={
                 "weight": P.SYN_WEIGHTS.LNTBCs2MSO,
-                "delay": P.SYN_DELAYS.LNTBCs2MSOipsi,
+                "delay": P.SYN_DELAYS.LNTBCs2MSO,
             },
             num_sources=P.POP_CONV.LNTBCs2MSOs,
         )
@@ -281,7 +371,7 @@ class BrainstemModel(SpikingModel):
             "x_to_one",
             syn_spec={
                 "weight": P.SYN_WEIGHTS.MNTBCs2MSO,
-                "delay": P.SYN_DELAYS.MNTBCs2MSOcontra,
+                "delay": P.SYN_DELAYS.MNTBCs2MSO,
             },
             num_sources=P.POP_CONV.MNTBCs2MSOs,
         )
