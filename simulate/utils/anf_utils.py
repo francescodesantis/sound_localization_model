@@ -5,6 +5,7 @@ from sorcery import dict_of
 from utils.custom_sounds import Click, Tone, ToneBurst, WhiteNoise, Click_Train, HarmonicComplex
 from utils.log_utils import logger
 from typing import Union   # ✅ added
+import numpy as np
 
 from cochleas.GammatoneCochlea import COCHLEA_KEY as GAMMATONE_COC_KEY
 from cochleas.GammatoneCochlea import sound_to_spikes as gammatone_cochlea
@@ -12,6 +13,8 @@ from cochleas.TanCarneyCochlea import COCHLEA_KEY as TC_COC_KEY
 from cochleas.TanCarneyCochlea import sound_to_spikes as tc_cochlea
 from cochleas.ZilanyCochlea import COCHLEA_KEY as ZI_COC_KEY
 from cochleas.ZilanyCochlea import sound_to_spikes as zi_cochlea
+from cochleas.CICochlea import COCHLEA_KEY as CI_COC_KEY
+from cochleas.CICochlea import sound_to_spikes as ci_cochlea
 
 from utils.cochlea_utils import ANGLES, NUM_ANF_PER_HC, NUM_CF, AnfResponse
 import nest
@@ -24,6 +27,7 @@ COCHLEAS = {
     GAMMATONE_COC_KEY: gammatone_cochlea,
     TC_COC_KEY: tc_cochlea,
     ZI_COC_KEY: zi_cochlea,
+    CI_COC_KEY: ci_cochlea,
 }
 
 

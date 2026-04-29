@@ -1,7 +1,7 @@
 import math
 import brian2 as b2
 import numpy as np
-from brian2 import ms
+from brian2 import ms, Hz
 from brian2hears import IRCAM_LISTEN, Sound, dB
 from typing import Union  # <-- ADD THIS
 
@@ -10,137 +10,15 @@ from utils.custom_sounds import Tone, ToneBurst
 from utils.log_utils import logger
 from utils.manual_fixes_to_b2h.HeadlessDatabase import HeadlessDatabase
 from sorcery import dict_of
-from .cochlea_utils import ANGLE_TO_SOFA
+from .cochlea_utils import ANGLE_TO_SOFA, SOFA_TO_ANGLE
 import os
 from scipy.signal import fftconvolve, resample
 import pysofaconventions as sofa
 from scipy.fft import rfft, irfft
 import matplotlib.pyplot as plt
 
-def sel_range(s, start=0 * ms, end=10 * ms):
-    return s[start:end]
-
-def angle_to_itd(angle, w_head: int = 22, v_sound: int = 33000):
-    delta_x = w_head * np.sin(np.deg2rad(angle))
-    return round(1000 * delta_x / v_sound, 2) * b2.ms
-
-def calculate_lefttoright_level_diff(freq, angle):
-    azimuth_rad = np.radians(angle)
-    head_radius = 0.0875  # meters
-    speed_of_sound = 343.0  # m/s
-    # Calculate wavelength and ka (wavelength * radius)
-    wavelength = speed_of_sound / (freq / b2.Hz)
-    ka = 2 * np.pi * head_radius / wavelength
-    # Frequency-dependent shadowing effect
-    # Higher ka values (higher frequencies or larger heads) create more shadowing
-    shadowing = np.minimum(20, ka * 2)  # Limited to 20 dB maximum
-    # Calculate ILD based on shadowing and azimuth
-    # The sin term gives directionality, shadowing term scales with frequency
-    ild = shadowing * np.sin(azimuth_rad)
-    # returns left - right difference
-    return np.abs(ild) * dB
-
-def synthetic_ild(sound: Tone, angle: int):
-    if type(sound) is not Tone:
-        # Linear interpolation between +15dB and -15dB for angles between -90 and +90
-        # For angle 0, diff will be 0dB
-        diff = np.abs((angle / 90) * 15) * dB  # This gives +15 for -90, 0 for 0, and -15 for +90
-    else:
-        diff = calculate_lefttoright_level_diff(sound.frequency, angle)
-    
-    logger.debug(f"ILD calculated as {diff}")
-    left = Sound(sound.sound)
-    right = Sound(sound.sound)
-    if angle > 0:
-        left.set_level(left.get_level() - diff)
-    else:
-        right.set_level(right.get_level() - diff) 
-
-    # azimuth_rad = np.radians(angle)
-    # max_mask = np.abs(np.sin(azimuth_rad))
-    # if angle < 0:  # Sound comes from the left
-    #     # Left ear gets less masking, right ear gets more
-    #     left_masking_factor = -(1 - max_mask)
-    #     right_masking_factor = -max_mask
-    # else:  # Sound comes from the right
-    #     # Right ear gets less masking, left ear gets more
-    #     left_masking_factor = max_mask
-    #     right_masking_factor = 1 - max_mask
-
-    # logger.debug(
-    #     f"{angle} -> left {diff * left_masking_factor}; right {diff * right_masking_factor}"
-    # )
-    # logger.debug(
-    #     f"original ILD: {diff}; new ILD: {diff * left_masking_factor + diff * right_masking_factor}"
-    # )
-    # # logger.debug(
-    # #     f"left {diff} * {left_masking_factor}; right {diff} * {right_masking_factor}"
-    # # )
-    # left.level += diff * left_masking_factor
-    # right.level += diff * right_masking_factor
-
-    # previous synthetic_ild(sound: Tone, angle: int):
-#     if type(sound) is not Tone:
-#         logger.error(f"selected HRTF synthetic_ild, but it only supports Tones")
-#         raise TypeError(f"sound is {type(sound)}, while it should be {Tone}")
-#     if angle is 0:
-#         return Sound((sound.sound, sound.sound), samplerate=sound.sound.samplerate)
-#     diff = calculate_lefttoright_level_diff(sound.frequency, angle)
-#     left = Sound(sound.sound)
-#     right = Sound(sound.sound)
-#     if diff < 0 * dB:
-#         left.level += diff
-#     else:
-#         right.level -= diff
-#     return Sound((left, right), samplerate=sound.sound.samplerate)
-
-    return Sound((left, right), samplerate=sound.sound.samplerate)
-
-def run_hrtf_ircam(sound: Union[Sound, Tone, ToneBurst], angle, hrtf_params) -> tuple[Sound, Sound]:
-    logger.debug(f"[run_hrtf] Starting HRTF for angle={angle} subj={hrtf_params['subj_number']}")
-
-    subj = hrtf_params["subj_number"]
-    orig_sound = sound
-
-    if type(sound) is not Sound:
-        sound = sound.sound
-
-    # --- Apply gating ---
-    if hrtf_params.get("apply_gating"):
-        logger.debug("[run_hrtf] Applying gating before HRTF...")
-        sound = apply_gating(sound, ramp_ms=hrtf_params.get("ramp_ms"))
-
-    samplerate = sound.samplerate
-    original_duration = sound.duration
-
-    if subj == "itd_only":
-        logger.debug("[run_hrtf] Using ITD-only synthetic transformation.")
-        sound = Sound.sequence(
-            Sound.silence(5 * ms, sound.samplerate),
-            sound,
-        )
-        hrtfset = HeadlessDatabase(13, azim_max=90).load_subject()
-        binaural_sound: Sound = hrtfset(azim=angle)(sound)
-
-    elif subj == "ild_only":
-        logger.debug("[run_hrtf] Using ILD-only synthetic transformation.")
-        binaural_sound: Sound = synthetic_ild(orig_sound, angle)
-
-    else:
-        logger.debug("[run_hrtf] Using IRCAM HRTF DB...")
-        hrtfdb = IRCAM_LISTEN(Paths.IRCAM_DIR)
-        hrtfset = hrtfdb.load_subject(hrtfdb.subjects[subj])
-        hrtf = hrtfset(azim=ANGLE_TO_SOFA[angle], elev=0)
-        binaural_sound: Sound = hrtf(sound)
-
-    binaural_sound = binaural_sound.resized(math.floor(original_duration * samplerate))
-    logger.debug("[run_hrtf] HRTF computation complete.")
-
-    return binaural_sound, sound
 
 def load_hrtf_subject(subj: int):
-
-
     # --- List and sort all .sofa files directly from the directory ---
     files = sorted(
         f for f in os.listdir(Paths.SOFA_DIR)
@@ -237,34 +115,146 @@ def apply_sofa_hrtf_to_sound(
     stereo = np.column_stack([L_final, R_final])
     return Sound(stereo, sound.samplerate)
 
+def estimate_itd_from_hrir(left_ir, right_ir, fs):
+    """
+    Estimate ITD (in seconds) from HRIR using cross-correlation.
+    Positive ITD = sound arrives first at left ear.
+    """
+
+    corr = np.correlate(left_ir, right_ir, mode='full')
+    lag = np.argmax(corr) - (len(right_ir) - 1)
+
+    itd_sec = lag / fs
+    return itd_sec
+
+def apply_itd_to_sound(sound: Sound, itd_sec: float) -> Sound:
+    """
+    Apply pure ITD to mono sound by delaying one channel.
+    """
+
+    fs = float(sound.samplerate)
+    x = np.asarray(sound).flatten()
+
+    delay_samples = int(round(abs(itd_sec) * fs))
+
+    if itd_sec < 0:
+        # left leads → delay right
+        left  = x
+        right = np.pad(x, (delay_samples, 0))[:len(x)]
+    else:
+        # right leads → delay left
+        left  = np.pad(x, (delay_samples, 0))[:len(x)]
+        right = x
+
+    stereo = np.column_stack([left, right])
+    return Sound(stereo, samplerate=fs*Hz)
+
+def apply_ild_to_sound(sofa_file, sound: Sound, azimuth_deg: float) -> Sound:
+    """
+    Apply only the ILD extracted from the HRIRs to a mono sound.
+    Uses apply_sofa_hrtf_to_sound to measure per-ear level,
+    then returns two copies of the original mono sound with those absolute levels.
+    """
+
+    # --- Apply full HRTF to measure per-ear levels ---
+    binaural_sound = apply_sofa_hrtf_to_sound(
+        sofa_file=sofa_file,
+        sound=sound,
+        azimuth_deg=azimuth_deg,
+        elevation_deg=0.0,
+    )
+
+    l_level = Sound(np.asarray(binaural_sound)[:, 0], samplerate=sound.samplerate).level
+    r_level = Sound(np.asarray(binaural_sound)[:, 1], samplerate=sound.samplerate).level
+
+    # --- Set original mono signal to each ear's absolute level ---
+    left_scaled  = sound.copy()
+    right_scaled = sound.copy()
+
+    left_scaled.level  = l_level
+    right_scaled.level = r_level
+
+    stereo = np.column_stack([np.asarray(left_scaled).flatten(),
+                               np.asarray(right_scaled).flatten()])
+    return Sound(stereo, samplerate=sound.samplerate)
+
 def run_hrtf(
-    sound,               # could be Sound or Tone/ToneBurst wrapper
-    angle: float,        # internal angle convention: +left, -right
-    hrtf_params          # must contain {"sofa_file": ..., "apply_gating": ...}
+    sound,
+    angle: float,
+    hrtf_params
 ):
     """
-    Unified HRTF interface for SOFA-based HRTFs (e.g., ARI).
-    Applies angle conversion, optional gating, and the SOFA HRIR convolution.
+    Unified HRTF interface with selectable binaural cue:
+
+    cue_to_apply:
+        - "HRTF"     → full HRIR convolution (default, original behavior)
+        - "itd_only" → apply only ITD (pure delay)
+        - "ild_only" → apply only ILD (level difference)
+
+    Returns
+    -------
+    binaural_sound : Sound (stereo)
+    sound          : Sound (mono, possibly preprocessed)
     """
 
-    logger.debug(f"[run_hrtf] Starting HRTF for angle={angle} subj={hrtf_params['subj_number']}")
+    logger.debug(f"[run_hrtf] Starting for angle={angle}")
 
     subj = hrtf_params["subj_number"]
-    hrtf = load_hrtf_subject(subj)
+    cue  = hrtf_params["cue_to_apply"]
 
+    # --- unwrap sound ---
     if type(sound) is not Sound:
         sound = sound.sound
 
-    # -------- Apply SOFA HRTF --------
-    binaural_sound = apply_sofa_hrtf_to_sound(
-        sofa_file=hrtf,
-        sound=sound,
-        azimuth_deg=ANGLE_TO_SOFA[angle],
-        elevation_deg=0.0,     # horizontal plane
-    )
+    sound_fs = float(sound.samplerate)
 
-    return binaural_sound, sound
+    if cue == "HRTF":
+        logger.debug("[run_hrtf] Applying FULL HRTF")
 
+        sofa_file = load_hrtf_subject(subj)
+
+        binaural_sound = apply_sofa_hrtf_to_sound(
+            sofa_file=sofa_file,
+            sound=sound,
+            azimuth_deg=ANGLE_TO_SOFA[angle],
+            elevation_deg=0.0,
+        )
+        return binaural_sound, sound
+
+    # ==========================================================
+    left_ir, right_ir, sofa_fs = load_hrir(subj, ANGLE_TO_SOFA[angle])
+
+    # --- resample HRIR if needed ---
+    if sound_fs != sofa_fs:
+        N_old = left_ir.shape[0]
+        N_new = int(round(N_old * (sound_fs / sofa_fs)))
+
+        left_ir  = resample(left_ir,  N_new)
+        right_ir = resample(right_ir, N_new)
+
+    # ==========================================================
+    if cue == "itd_only":
+        logger.debug("[run_hrtf] Applying ITD only")
+
+        itd = estimate_itd_from_hrir(left_ir, right_ir, sound_fs)
+        binaural_sound = apply_itd_to_sound(sound, itd)
+
+        return binaural_sound, sound
+    # ==========================================================
+    elif cue == "ild_only":
+        logger.debug("[run_hrtf] Applying ILD only")
+        sofa_file = load_hrtf_subject(subj)
+        binaural_sound, sound = apply_ild_to_sound(
+            sofa_file=sofa_file,
+            sound=sound,
+            azimuth_deg=ANGLE_TO_SOFA[angle],
+            elevation_deg=0.0,
+        )
+        return binaural_sound, sound
+
+    else:
+        raise ValueError(f"Unknown cue_to_apply: {cue}")
+    
 def load_hrir(subject_id: int, azimuth_deg: float):
     """
     Load left/right HRIR for a given subject and azimuth (elevation = 0°).
@@ -289,7 +279,7 @@ def load_hrir(subject_id: int, azimuth_deg: float):
     az = positions[:, 0]
     el = positions[:, 1]
 
-    az_target = ANGLE_TO_SOFA[azimuth_deg]
+    az_target = azimuth_deg
 
     # Find closest measurement (elevation fixed to 0)
     dist = np.sqrt((az - az_target)**2 + (el - 0)**2)
@@ -323,7 +313,7 @@ def plot_hrir(subject_id: int, azimuth_deg: float, target_fs=None):
     ax.plot(times, left_ir,  color='m', label='Left')
     ax.plot(times, right_ir, color='g', label='Right')
 
-    ax.set_title(f"HRIR – Subject {subject_id}, Azimuth {azimuth_deg}°, Elevation 0°")
+    ax.set_title(f"HRIR – Subject {subject_id}, Azimuth {SOFA_TO_ANGLE[azimuth_deg]}°, Elevation 0°")
     ax.set_xlabel("Time (ms)")
     ax.set_ylabel("Amplitude")
     ax.legend()
@@ -366,14 +356,11 @@ def plot_hrtf_magnitude(subject_id: int, azimuth_deg: float, fs: float, figsize=
     ax.semilogx(freqs, L_mag, color='m', label="Left")
     ax.semilogx(freqs, R_mag, color='g', label="Right")
 
-    for v in [200, 500, 1200, 4000, 16000]:
-        ax.axvline(v,  linestyle='--', color='gray')
-
     ax.set_xlim(200, 20000)
 
     ax.set_xlabel("Frequency (kHz)")
     ax.set_ylabel("Magnitude (dB)")
-    ax.set_title(f"HRTF Magnitude – Subject {subject_id}, Azimuth {azimuth_deg}°, Elevation 0°")
+    ax.set_title(f"HRTF Magnitude – Subject {subject_id}, Azimuth {SOFA_TO_ANGLE[azimuth_deg]}°, Elevation 0°")
 
     ax.set_xscale('log')
     ax.set_xticks(np.array([0.2, 0.5, 1, 2, 5, 10, 20]) * 1000)

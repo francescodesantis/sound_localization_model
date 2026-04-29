@@ -34,7 +34,7 @@ class Parameters:
                 "Zilany": {
                     "hrtf_params": {
                         "subj_number": 0,
-                        "itd_remove_strategy": ITD_REMOVAL_STRAT.ESTIMATE_FROM_HRTF,
+                        "cue_to_apply": "HRTF",
                     },
                     "cochlea_params": {
                         "anf_num": (6, 2, 2),            # Example fiber counts (HSR, MSR, LSR)
@@ -46,7 +46,15 @@ class Parameters:
                     },
                     "rng_seed": 42,
                     "omni_noise_level": 0,
-                }
+                },
+                "CI": {
+                    "hrtf_params": {
+                        "subj_number": 0,
+                        "cue_to_apply": "HRTF",
+                    },
+                    "rng_seed": 42,
+                    "omni_noise_level": 0,
+                }  
             }
         )
     )
@@ -70,7 +78,7 @@ class Parameters:
         ANFs2SBCs: int = 3
         ANFs2GBCs: int = 20
         GBCs2MNTBCs: int = 1
-        GBCs2LNTBCs: int = 1 #new
+        GBCs2LNTBCs: int = 1 
         SBCs2LSOs: int = 40
         MNTBCs2LSOs: int = 8
         SBCs2MSOs: int = 3
@@ -85,17 +93,17 @@ class Parameters:
     @dataclass
     class SYN_WEIGHTS:
         ANFs2SBCs: float = 16.0      
-        ANFs2GBCs: float = 7.0
+        ANFs2GBCs: float = 7.0 #high
         #      
         GBCs2LNTBCs: float = 5.0
-        GBCs2MNTBCs: float = 30.0
+        GBCs2MNTBCs: float = 30.0 #high
         #
-        SBCs2LSO: float = 1.0 #5       
-        MNTBCs2LSO: float = -10.0 
+        SBCs2LSO: float = 0.5 #tuned for a single spike   
+        MNTBCs2LSO: float = -2.5 #tuned for a single spike #-2.3
         #
-        SBCs2MSO: float = 12.0
-        MNTBCs2MSO: float = -10.0 #-20.0
-        LNTBCs2MSO: float = -10.0 #-20.0
+        SBCs2MSO: float = 10.0 #10
+        MNTBCs2MSO: float = -15.0 #-10.0
+        LNTBCs2MSO: float = 0 #-10.0
         #
         MNTBCs2SPN: float = -40.0 
 
@@ -108,12 +116,12 @@ class Parameters:
         GBCs2LNTBCs: float = 0.5
         #
         SBCs2LSO: float = 2.0
-        MNTBCs2LSO: float = 1.0 #
+        MNTBCs2LSO: float = 1.28 #
         #
         SBCs2MSOipsi: float = 2.0
         SBCs2MSOcontra: float = 2.0
-        LNTBCs2MSO: float = 1.0 
-        MNTBCs2MSO: float = 1.0
+        LNTBCs2MSO: float = 0.465 
+        MNTBCs2MSO: float = 1.28
         #
         MNTBCs2SPN: float = 1.0 #0.11 integration time at MNTB/LNTB
 
@@ -138,10 +146,10 @@ class Parameters:
     # ------------------------------------------------------------
     @dataclass
     class G_LEAK:
-        SBC: float = 43.3   # tau = 0.6 ms
+        SBC: float = 43.3   # tau = 0.6 ms    or. 20.0   # tau = 1.3 ms
         GBC: float = 86.6   # tau = 0.15 ms
-        LNTBC: float = 1.33 # tau = 9 ms  
-        MNTBC: float = 1.33 # tau = 9 ms 
+        LNTBC: float = 3 # tau = 4 ms  
+        MNTBC: float = 3 # tau = 4 ms 
         LSO: float = 24 # tau = 0.5 ms
         MSO: float = 70 # tau = 1 ms   
         SPN: float = 75 # tau = 1 ms  
@@ -151,12 +159,12 @@ class Parameters:
     # ------------------------------------------------------------
     @dataclass
     class E_L:
-        SBC: float = -65.0 
-        GBC: float = -65.0
+        SBC: float = -66.0 
+        GBC: float = -61.0
         LNTBC: float = -60.0   
         MNTBC: float = -67.0
         LSO: float = -63.0
-        MSO: float = -57.0
+        MSO: float = -55.0
         SPN: float = -65.0
     
     # ------------------------------------------------------------
@@ -164,8 +172,8 @@ class Parameters:
     # ------------------------------------------------------------
     @dataclass 
     class V_RESET:
-        SBC: float = -67.0   
-        GBC: float = -67.0   
+        SBC: float = -68.0   
+        GBC: float = -63.0   
         LNTBC: float = -62.0
         MNTBC: float = -69.0
         LSO: float = -65.0
@@ -229,7 +237,7 @@ class Parameters:
         SBC: float = 0.5       
         GBC: float = 0.5       
         LNTBC: float = 3.8     
-        MNTBC: float = 0.35     
+        MNTBC: float = 0.17    
         LSO: float = 1.0
         MSO: float = 0.3
         SPN: float = 1.0
@@ -256,8 +264,8 @@ class Parameters:
         GBC: float = 2.0      
         LNTBC: float = 2.0   
         MNTBC: float = 2.0   
-        LSO: float = 0.15   
-        MSO: float = 0.15       
+        LSO: float = 0.2   
+        MSO: float = 0.2       
         SPN: float = 0.15  
     # ------------------------------------------------------------  
     @dataclass
@@ -266,8 +274,8 @@ class Parameters:
         GBC: float = 2.0       
         LNTBC: float = 2.0
         MNTBC: float = 2.0      
-        LSO: float = 0.7
-        MSO: float = 0.7  
+        LSO: float = 1.76
+        MSO: float = 1.76  
         SPN: float = 0.7  
     # ------------------------------------------------------------   
 
@@ -282,7 +290,8 @@ class Parameters:
             default_factory=lambda: {
                 "resolution": 0.01,
                 "rng_seed": 42,
-                "total_num_virtual_procs": 32,
+                "total_num_virtual_procs": 14,
+                "local_num_threads": 14
             }
         )
 

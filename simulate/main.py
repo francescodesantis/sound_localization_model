@@ -7,7 +7,7 @@ import brian2hears as b2h
 import dill
 import nest
 from brian2 import Hz
-from utils.anf_utils import ZI_COC_KEY, create_sound_key, load_anf_response
+from utils.anf_utils import ZI_COC_KEY, CI_COC_KEY, create_sound_key, load_anf_response
 from utils.cochlea_utils import ANGLES
 from utils.path_utils import Paths, save_current_conf
 from models.BrainstemModel.BrainstemModel import BrainstemModel
@@ -57,33 +57,35 @@ def create_save_result_object(
 
 if __name__ == "__main__":
 
-    TIME_SIMULATION = 100
+    TIME_SIMULATION = 60 
     TIME_ON = 50
-    TIME_OFF = TIME_SIMULATION - TIME_ON    
+    TIME_OFF = TIME_SIMULATION - TIME_ON 
+    RAMP_MS = 5     
     LEVEL = 60
 
     inputs = [
-        #Tone(0.5 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=10, offset_silence_duration= TIME_OFF * b2.ms),
-        Tone(1.2 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=10, offset_silence_duration= TIME_OFF * b2.ms),
-        Tone(16 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=10, offset_silence_duration= TIME_OFF * b2.ms),
-        Click(duration=TIME_SIMULATION * b2.ms, click_duration=0.5*b2.ms, level=LEVEL * b2h.dB)
-    # #     Tone(4 * b2.kHz, duration=TIME_SIMULATION * b2.ms, level=LEVEL * b2h.dB, ramp_ms=10, offset_silence_duration=0 * b2.ms),
-    #     Tone(16 * b2.kHz, duration=TIME_SIMULATION * b2.ms, level=LEVEL * b2h.dB, ramp_ms=10, offset_silence_duration=0 * b2.ms),
-    #     WhiteNoise(duration=TIME_SIMULATION * b2.ms, level=LEVEL * b2h.dB, ramp_ms=10, offset_silence_duration=0 * b2.ms),
-    #     Click(duration=TIME_SIMULATION * b2.ms, click_duration=1, level=LEVEL * b2h.dB)
-     ]
+        Tone(0.5 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
+        #Click(duration=TIME_SIMULATION * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB),
+        #Click_Train(duration=TIME_SIMULATION * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=5*b2.ms),
+    ]
 
     models = [BrainstemModel]
     cochlea_key = ZI_COC_KEY
 
-    ps = []
+    p = params("baseline")
+    p1 = params("itd_only")
+    p1.cochlea[cochlea_key]['hrtf_params']['cue_to_apply'] = "itd_only"
+    p2 = params("ild_only")
+    p2.cochlea[cochlea_key]['hrtf_params']['cue_to_apply'] = "ild_only" 
+    ps = [p]
 
-    for d in [1,1.25,1.5,1.75]:
-        p = params(f"MNTBCs2LSO_delay_{d}ms")
-        p.SYN_DELAYS.MNTBCs2LSO = d
-        p.SYN_DELAYS.MNTBCs2MSO = d
-        p.SYN_WEIGHTS.LNTBCs2MSO = 0
-        ps.append(p)
+    # for d in [0.78,1.03,1.53,1.78,2.03]:
+    #     p = params(f"delay_{d}ms_winh_{-2.3}")
+    #     p.SYN_WEIGHTS.MNTBCs2LSO = -2.3
+    #     p.SYN_WEIGHTS.LNTBCs2MSO = 0
+    #     p.SYN_DELAYS.MNTBCs2MSO = d
+    #     p.SYN_DELAYS.MNTBCs2LSO = d
+    #     ps.append(p)
 
     num_runs = len(inputs) * len(ps)
     current_run = 0
