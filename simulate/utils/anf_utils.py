@@ -61,30 +61,30 @@ def create_sound_key(sound):
         return f"{sound_type}_{level}dB"
 
 
-def load_anf_response(sound, angle, cochlea_key, params, ignore_cache=False):
-
+def load_anf_response(sound, condition_val, cochlea_key, params, ignore_cache=False):
+    # Get the specific cochlea function (Zilany, Gammatone, etc.)
     cochlea_func: MemorizedFunc = COCHLEAS[cochlea_key]
-    logger.info(f"Subject chosen: {params[cochlea_key]['hrtf_params']['subj_number']}")
-    params = params[cochlea_key]
+    
+    # Extract the params for this specific cochlea
+    specific_params = params[cochlea_key]
+    
+    # Get the mode to make logging clearer
+    mode = specific_params['hrtf_params']['simulation_mode']    
+    logger.info(f"Subject: {specific_params['hrtf_params']['subj_number']} | Mode: {mode}")
 
-    if not cochlea_func.check_call_in_cache(sound, angle, params):
-        logger.info("[load_anf_response] Saved ANF not found. Regenerating...")
+    # Joblib cache check using condition_val (could be deg, seconds, or dB)
+    if not cochlea_func.check_call_in_cache(sound, condition_val, specific_params):
+        logger.info(f"[load_anf_response] Saved ANF not found for {mode}={condition_val}. Regenerating...")
 
     if ignore_cache:
-        logger.info("[load_anf_response] Ignoring cache — forcing recompute.")
         cochlea_func = cochlea_func.call
-
-    logger.info(f"[load_anf_response] Generating ANF for "
-                f"sound={sound}, angle={angle}, key={cochlea_key}")
-
-    if ignore_cache:
-        cochlea_func = cochlea_func.call  # forces execution
     try:
-        anf = cochlea_func(sound, angle, params, plot_spikes=False)
+        # Every cochlea function in COCHLEAS must now handle condition_val based on mode
+        anf = cochlea_func(sound, condition_val, specific_params, plot_spikes=False)
     except TypeError as e:
-        if "unexpected" in e.args[0]:
-            logger.error(f"{e}, please check the signature of cochlea")
+        logger.error(f"Error calling {cochlea_key}: {e}")
         raise e
+        
     return anf
 
 

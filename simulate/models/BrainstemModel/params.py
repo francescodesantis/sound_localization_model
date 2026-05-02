@@ -34,7 +34,10 @@ class Parameters:
                 "Zilany": {
                     "hrtf_params": {
                         "subj_number": 0,
-                        "cue_to_apply": "HRTF",
+                        "cue_to_apply": "HRTF", # "HRTF", "itd_only", "ild_only"
+                        "simulation_mode": "angle", # New: "angle", "artificial_itd", "artificial_ild"
+                        "artificial_itd": 0.0,      # in seconds (e.g. 0.0005 for 500us)
+                        "artificial_ild": 0.0,      # in dB
                     },
                     "cochlea_params": {
                         "anf_num": (6, 2, 2),            # Example fiber counts (HSR, MSR, LSR)
@@ -99,11 +102,11 @@ class Parameters:
         GBCs2MNTBCs: float = 30.0 #high
         #
         SBCs2LSO: float = 0.5 #tuned for a single spike   
-        MNTBCs2LSO: float = -2.5 #tuned for a single spike #-2.3
+        MNTBCs2LSO: float = -2.3 #tuned for a single spike
         #
-        SBCs2MSO: float = 10.0 #10
-        MNTBCs2MSO: float = -15.0 #-10.0
-        LNTBCs2MSO: float = 0 #-10.0
+        SBCs2MSO: float = 10.0 
+        MNTBCs2MSO: float = -10.0 
+        LNTBCs2MSO: float = 0 
         #
         MNTBCs2SPN: float = -40.0 
 

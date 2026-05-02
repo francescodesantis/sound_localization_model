@@ -105,13 +105,13 @@ def shift_senders(x, hist_logscale=False):
 def draw_hist(
     ax,
     senders_renamed,
-    angles,
+    cues,
     num_neurons,
     max_spikes_single_neuron,
     logscale=True,
     freq=None,
 ):
-    """draws a low opacity horizontal histogram for each angle position
+    """draws a low opacity horizontal histogram for each cue position
 
     includes a secondary y-axis, optionally logarithmic.
     if logscale, expects senders to be renamed to CFs
@@ -129,7 +129,7 @@ def draw_hist(
     if logscale:
         bins = greenwood_cf_array(CFMIN/ b2.Hz, CFMAX/ b2.Hz, bin_count) / b2.Hz
 
-        for j, angle in enumerate(angles):
+        for j, cue in enumerate(cues):
             left_data = senders_renamed["L"][j]
             right_data = senders_renamed["R"][j]
 
@@ -143,7 +143,7 @@ def draw_hist(
                 bins[:-1],
                 -left_hist_normalized,
                 height=np.diff(bins),  # bins have different sizes
-                left=angle,
+                left=cue,
                 color="m",
                 alpha=alpha,
                 align="edge",
@@ -152,7 +152,7 @@ def draw_hist(
                 bins[:-1],
                 right_hist_normalized,
                 height=np.diff(bins),
-                left=angle,
+                left=cue,
                 color="g",
                 alpha=alpha,
                 align="edge",
@@ -168,7 +168,7 @@ def draw_hist(
     else:
         bins = np.linspace(0, num_neurons, bin_count)
 
-        for j, angle in enumerate(angles):
+        for j, cue in enumerate(cues):
             left_data = senders_renamed["L"][j]
             right_data = senders_renamed["R"][j]
 
@@ -185,7 +185,7 @@ def draw_hist(
                 bins[:-1],
                 -left_hist_normalized,
                 height=num_neurons / bin_count,
-                left=angle,
+                left=cue,
                 color="C0",
                 alpha=alpha,
                 align="edge",
@@ -194,7 +194,7 @@ def draw_hist(
                 bins[:-1],
                 right_hist_normalized,
                 height=num_neurons / bin_count,
-                left=angle,
+                left=cue,
                 color="C1",
                 alpha=alpha,
                 align="edge",
@@ -208,17 +208,17 @@ def draw_hist(
             ax.axhline(y=neur_n)
     ax.yaxis.set_minor_locator(plt.NullLocator())  # remove minor ticks
 
-def draw_single_angle_histogram(data, angle, population="SBC", fontsize=16, alpha=0.8):
+def draw_single_cue_histogram(data, cue, population="SBC", fontsize=16, alpha=0.8):
     """
-    Draw horizontal histograms of spike distributions across frequencies for a single angle,
+    Draw horizontal histograms of spike distributions across frequencies for a single cue,
     with left population growing downward and right population growing upward from a central axis.
 
     Parameters:
     -----------
     data : dict
-        The full dataset containing angle_to_rate information
-    angle : float
-        The specific angle to visualize
+        The full dataset containing cue_to_rate information
+    cue : float
+        The specific cue to visualize
     population : str
         Name of the neural population to visualize
     fontsize : int
@@ -235,10 +235,10 @@ def draw_single_angle_histogram(data, angle, population="SBC", fontsize=16, alph
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 2.42))
 
-    # Get data for this angle and population
+    # Get data for this cue and population
     pop_data = {
-        "L": data["angle_to_rate"][angle]["L"][population],
-        "R": data["angle_to_rate"][angle]["R"][population],
+        "L": data["cue_to_rate"][cue]["L"][population],
+        "R": data["cue_to_rate"][cue]["R"][population],
     }
 
     # Create logarithmic bins for frequency
@@ -301,7 +301,7 @@ def draw_single_angle_histogram(data, angle, population="SBC", fontsize=16, alph
     # ax.legend(fontsize=fontsize)
 
     # plt.title(
-    #     f"{population} population response at {angle}° azimuth\n"
+    #     f"{population} population response at {cue}° azimuth\n"
     #     f'Sound: {data["conf"]["sound_key"]}',
     #     fontsize=fontsize * 1.2,
     # )  # Title slightly larger
@@ -310,8 +310,8 @@ def draw_single_angle_histogram(data, angle, population="SBC", fontsize=16, alph
 
     return fig
 
-def synthetic_angle_to_itd(angle, w_head: int = 22, v_sound: int = 33000):
-    delta_x = w_head * np.sin(np.deg2rad(angle))
+def synthetic_cue_to_itd(cue, w_head: int = 22, v_sound: int = 33000):
+    delta_x = w_head * np.sin(np.deg2rad(cue))
     return round(1000 * delta_x / v_sound, 2)
 
 def get_spike_phases(spike_times: np.ndarray, frequency: float) -> np.ndarray:
@@ -333,7 +333,7 @@ def range_around_center(center, radius, min_val=0, max_val=np.iinfo(np.int64).ma
 
 def calculate_vector_strength_from_result(
         res,
-        angle,
+        cue,
         pop,
         side='L',
         freq=None,            # if None: freq = res['basesound'].frequency
@@ -353,7 +353,7 @@ def calculate_vector_strength_from_result(
     import numpy as np
     import matplotlib.pyplot as plt
 
-    spikes = res["angle_to_rate"][angle][side][pop]
+    spikes = res["cue_to_rate"][cue][side][pop]
 
     sender2times = defaultdict(list)
     for sender, time in zip(spikes["senders"], spikes["times"]):
@@ -417,7 +417,7 @@ def calculate_vector_strength_from_result(
         if center_at_peak:
             bin_centers_orig = (orig_bins[:-1] + orig_bins[1:]) / 2
             peak_center = bin_centers_orig[peak_bin_idx]
-            shifted_phases = np.angle(np.exp(1j * (phases - peak_center)))
+            shifted_phases = np.cue(np.exp(1j * (phases - peak_center)))
 
             bins = np.linspace(-np.pi, np.pi, n_bins + 1)
             values = shifted_phases
@@ -502,7 +502,7 @@ def calculate_vector_strength_from_result(
 
 def calculate_vector_strength_from_result_polar(
         res,
-        angle,
+        cue,
         side,
         pop,
         freq=None,  # if None: freq = res['basesound'].frequency
@@ -515,7 +515,7 @@ def calculate_vector_strength_from_result_polar(
         ):
     
     # Get spikes and organize times per sender
-    spikes = res["angle_to_rate"][angle][side][pop] 
+    spikes = res["cue_to_rate"][cue][side][pop] 
     print(spikes)
     sender2times = defaultdict(list)
     for sender, time in zip(spikes["senders"], spikes["times"]):
@@ -589,7 +589,7 @@ def calculate_vector_strength_from_result_polar(
 
 def draw_spikes_pop(
     res,
-    angle,
+    cue,
     side,
     pop,
     y_ax = 'cf_custom',
@@ -601,7 +601,7 @@ def draw_spikes_pop(
     color = None,
     figsize = (7,4)
 ):
-    spikes = res["angle_to_rate"][angle][side][pop]  
+    spikes = res["cue_to_rate"][cue][side][pop]  
     num_neurons = len(spikes["global_ids"])
     cf = greenwood_cf_array(CFMIN/ b2.Hz, CFMAX/ b2.Hz, num_neurons)*b2.Hz
     neuron_to_cf = {global_id: freq for global_id, freq in zip(spikes["global_ids"], cf)}
@@ -692,7 +692,7 @@ def draw_spikes_pop(
 
 def draw_spikes_pop_bothside(
     res,
-    angle,
+    cue,
     pop,
     y_ax = 'cf_custom',
     f_ticks = [100,1000,10000],
@@ -705,7 +705,7 @@ def draw_spikes_pop_bothside(
 ):
     fig, ax = plt.subplots(2, figsize = figsize, sharex = True)
     for i, side in enumerate(['L', 'R']):
-        spikes = res["angle_to_rate"][angle][side][pop]  
+        spikes = res["cue_to_rate"][cue][side][pop]  
         num_neurons = len(spikes["global_ids"])
         cf = greenwood_cf_array(CFMIN/ b2.Hz, CFMAX/ b2.Hz, num_neurons)*b2.Hz
         neuron_to_cf = {global_id: freq for global_id, freq in zip(spikes["global_ids"], cf)}
@@ -759,7 +759,7 @@ def draw_spikes_pop_bothside(
 
 def draw_psth_pop_bothside(
     res,
-    angle,
+    cue,
     pop,
     title=None,
     xlim=None,
@@ -770,7 +770,7 @@ def draw_psth_pop_bothside(
 ):
     fig, ax = plt.subplots(1, figsize = figsize)
     for color, side in zip(['m', 'g'],['L', 'R']):
-        spikes = res["angle_to_rate"][angle][side][pop] 
+        spikes = res["cue_to_rate"][cue][side][pop] 
         spike_times = spikes['times']
         spike_senders = spikes['senders']
         num_neurons = len(spikes["global_ids"])
@@ -810,7 +810,7 @@ def draw_psth_pop_bothside(
 
 def draw_psth_pop(
     res,
-    angle,
+    cue,
     side,
     pop,
     title=None,
@@ -832,7 +832,7 @@ def draw_psth_pop(
     if ylim is None:
         ylim = [CFMIN / Hz, CFMAX / Hz]  # entire population by default
 
-    spikes = res["angle_to_rate"][angle][side][pop]
+    spikes = res["cue_to_rate"][cue][side][pop]
 
     # -----------------------------
     # Helper: filter spikes in time & CF interval
@@ -887,15 +887,15 @@ def draw_psth_pop(
     ax.set_yticks([])
     plt.show()
 
-def calculate_firing_rates(angle_to_rate, pop, sides, angles, duration, cf_interval=None):
+def calculate_firing_rates(cue_to_rate, pop, sides, cues, duration, cf_interval=None):
     """
-    Calculate firing rates for different sides and angles.
+    Calculate firing rates for different sides and cues.
     
     Parameters:
-    - angle_to_rate: Dictionary mapping angles to rate data
+    - cue_to_rate: Dictionary mapping cues to rate data
     - pop: Population name (e.g., 'LSO')
     - sides: List of sides ('L', 'R', or both)
-    - angles: List of angles to process
+    - cues: List of cues to process
     - duration: Duration of the simulation
     - cf_interval: Optional frequency interval for filtering
     
@@ -905,32 +905,32 @@ def calculate_firing_rates(angle_to_rate, pop, sides, angles, duration, cf_inter
     """
     
     # Get frequency space
-    num_neurons = len(angle_to_rate[0]['L'][pop]["global_ids"])
+    num_neurons = len(cue_to_rate[0]['L'][pop]["global_ids"])
     cf = greenwood_cf_array(CFMIN/ b2.Hz, CFMAX/ b2.Hz, num_neurons)/b2.Hz
     
     if cf_interval is None:
         # Simple case - use all neurons
         tot_spikes = {
             side: [
-                len(angle_to_rate[angle][side][pop]["times"]) / duration
-                for angle in angles
+                len(cue_to_rate[cue][side][pop]["times"]) / duration
+                for cue in cues
             ]
             for side in sides
         }
         avg_neuron_rate = {
             side: [
-                len(angle_to_rate[angle][side][pop]["times"]) / (duration*num_neurons)
-                for angle in angles
+                len(cue_to_rate[cue][side][pop]["times"]) / (duration*num_neurons)
+                for cue in cues
             ]
             for side in sides
         }
 
         active_neuron_rate = {
             side: [
-                avg_fire_rate_actv_neurons(angle_to_rate[angle][side][pop])
+                avg_fire_rate_actv_neurons(cue_to_rate[cue][side][pop])
                 * (1 * b2.second)
                 / duration
-                for angle in angles
+                for cue in cues
             ]
             for side in sides
         }
@@ -946,26 +946,26 @@ def calculate_firing_rates(angle_to_rate, pop, sides, angles, duration, cf_inter
         tot_spikes[side] = []
         avg_neuron_rate[side] = []
         
-        for angle in angles:
+        for cue in cues:
             # Find indices in CF array corresponding to interval bounds
             _, ymin_idx = take_closest(cf, cf_interval[0])
             _, ymax_idx = take_closest(cf, cf_interval[1])
 
             # Calculate actual neuron IDs from global_ids and indices
-            base_id = angle_to_rate[angle][side][pop]["global_ids"][0]
+            base_id = cue_to_rate[cue][side][pop]["global_ids"][0]
             ymin = base_id + ymin_idx
             ymax = base_id + ymax_idx
 
             # Filter spikes within the specified range
-            cluster_mask = (angle_to_rate[angle][side][pop]['senders'] >= ymin) & (angle_to_rate[angle][side][pop]['senders'] <= ymax)
-            cluster_times = angle_to_rate[angle][side][pop]['times'][cluster_mask]
+            cluster_mask = (cue_to_rate[cue][side][pop]['senders'] >= ymin) & (cue_to_rate[cue][side][pop]['senders'] <= ymax)
+            cluster_times = cue_to_rate[cue][side][pop]['times'][cluster_mask]
 
-            # Calculate rate for this angle and side
+            # Calculate rate for this cue and side
             tot_spikes[side].append(len(cluster_times) / duration)
             avg_neuron_rate[side].append(len(cluster_times)/((ymax - ymin)*duration))
 
             # Compute cluster numerosity (unique senders)
-            unique_senders = np.unique(angle_to_rate[angle][side][pop]['senders'][cluster_mask])
+            unique_senders = np.unique(cue_to_rate[cue][side][pop]['senders'][cluster_mask])
         
         cluster_numerosity[side] = len(unique_senders)
     
@@ -987,7 +987,7 @@ def normalize_rates(plotted_rate, sides):
     original_values = {}
     
     for side in sides:
-        # Find the minimum and maximum values across all angles for this side
+        # Find the minimum and maximum values across all cues for this side
         min_value = min(plotted_rate[side])
         max_value = max(plotted_rate[side])
         
@@ -995,8 +995,8 @@ def normalize_rates(plotted_rate, sides):
         original_values[side] = {
             'min_value': min_value,
             'max_value': max_value,
-            'min_angle_idx': plotted_rate[side].index(min_value),
-            'max_angle_idx': plotted_rate[side].index(max_value)
+            'min_cue_idx': plotted_rate[side].index(min_value),
+            'max_cue_idx': plotted_rate[side].index(max_value)
         }
         
         # Avoid division by zero - check if max and min are different
@@ -1009,7 +1009,7 @@ def normalize_rates(plotted_rate, sides):
     
     return normalized_rate, original_values
 
-def add_rate_annotations(ax, original_values, normalized_rates, angles, sides, side_colors):
+def add_rate_annotations(ax, original_values, normalized_rates, cues, sides, side_colors):
     """
     Add annotations showing original rate values at min/max points.
     
@@ -1017,7 +1017,7 @@ def add_rate_annotations(ax, original_values, normalized_rates, angles, sides, s
     - ax: Matplotlib axis to plot on
     - original_values: Dictionary with original min/max values and indices
     - normalized_rates: Dictionary of normalized rates by side
-    - angles: List of angles
+    - cues: List of cues
     - sides: List of sides
     - side_colors: Dictionary mapping sides to colors
     """
@@ -1032,8 +1032,8 @@ def add_rate_annotations(ax, original_values, normalized_rates, angles, sides, s
     for side_idx, side in enumerate(sides):
         min_value = original_values[side]['min_value']/Hz
         max_value = original_values[side]['max_value']/Hz
-        min_angle_idx = original_values[side]['min_angle_idx']
-        max_angle_idx = original_values[side]['max_angle_idx']
+        min_cue_idx = original_values[side]['min_cue_idx']
+        max_cue_idx = original_values[side]['max_cue_idx']
         
         # Format values as Hz or kHz
         if max_value < 1000:
@@ -1047,10 +1047,10 @@ def add_rate_annotations(ax, original_values, normalized_rates, angles, sides, s
             min_text = f"{min_value/1000:.2f} kHz"
         
         # Calculate positions to avoid overlapping
-        min_x = angles[min_angle_idx]
-        min_y = normalized_rates[side][min_angle_idx]
-        max_x = angles[max_angle_idx]
-        max_y = normalized_rates[side][max_angle_idx]
+        min_x = cues[min_cue_idx]
+        min_y = normalized_rates[side][min_cue_idx]
+        max_x = cues[max_cue_idx]
+        max_y = normalized_rates[side][max_cue_idx]
         
         # Offset for max annotation - try to position near the top of the plot
         # but avoid overlapping with other annotations
@@ -1126,7 +1126,7 @@ def plot_cf_intervals_grid(data, intervals, pop='MSO', rate=False):
             title = f"{interval[0]}-{interval[1]} Hz"
             
             # Plot in the corresponding subplot
-            draw_rate_vs_angle_pop(
+            draw_rate_vs_cue_pop(
                 data=data,
                 pop=pop,
                 rate=rate,
@@ -1157,12 +1157,12 @@ def plot_tonotopic_heatmaps(
     show_sides=True
 ):
     """
-    Generates heatmaps for auditory neural responses across angles and frequency bands.
+    Generates heatmaps for auditory neural responses across cues and frequency bands.
     
     Parameters:
     -----------
     data : dict
-        Dictionary containing simulation data with angle_to_rate information
+        Dictionary containing simulation data with cue_to_rate information
     pop : str, default='LSO'
         Population name to analyze (e.g., 'LSO', 'MSO')
     num_cells_per_interval : int, default=50
@@ -1190,13 +1190,13 @@ def plot_tonotopic_heatmaps(
         The generated figure with heatmaps
     """
     # Extract required data
-    angle_to_rate = data["angle_to_rate"]
+    cue_to_rate = data["cue_to_rate"]
     duration = (data.get("simulation_time", data["sounds"]['base_sound'].sound.duration / b2.ms) * b2.ms)
-    angles = list(angle_to_rate.keys())
+    cues = list(cue_to_rate.keys())
     sides = ["L", "R"]
     
     # Get total number of neurons
-    num_neurons = len(angle_to_rate[angles[0]]['L'][pop]["global_ids"])
+    num_neurons = len(cue_to_rate[cues[0]]['L'][pop]["global_ids"])
     
     # Generate full CF array using greenwood
     cf = greenwood_cf_array(CFMIN/ b2.Hz, CFMAX/ b2.Hz, num_neurons)*b2.Hz
@@ -1207,20 +1207,20 @@ def plot_tonotopic_heatmaps(
         num_intervals += 1  # Add one more interval for remaining cells
     
     # Initialize matrices to store firing rates
-    rate_matrices = {side: np.zeros((num_intervals, len(angles))) for side in sides}
+    rate_matrices = {side: np.zeros((num_intervals, len(cues))) for side in sides}
     
     # Store characteristic frequencies for each interval
     cf_ids = np.zeros(num_intervals)
     
     # Calculate the base neuron ID for each side
     base_ids = {
-        side: angle_to_rate[angles[0]][side][pop]["global_ids"][0]
+        side: cue_to_rate[cues[0]][side][pop]["global_ids"][0]
         for side in sides
     }
     
-    # Calculate firing rates for each interval and angle
+    # Calculate firing rates for each interval and cue
     for side in sides:
-        neuron_to_cf = {global_id: freq for global_id, freq in zip(angle_to_rate[0][side][pop]["global_ids"], cf)}
+        neuron_to_cf = {global_id: freq for global_id, freq in zip(cue_to_rate[0][side][pop]["global_ids"], cf)}
         for i in range(num_intervals):
             # Define the range of neurons for this interval
             start_idx = i * num_cells_per_interval
@@ -1234,15 +1234,15 @@ def plot_tonotopic_heatmaps(
             ycentral = int((ymin + ymax)/2)
             cf_ids[i] = neuron_to_cf[ycentral]
             
-            for j, angle in enumerate(angles):
+            for j, cue in enumerate(cues):
                 # Filter spikes within the specified range
                 cluster_mask = (
-                    (angle_to_rate[angle][side][pop]['senders'] >= ymin) & 
-                    (angle_to_rate[angle][side][pop]['senders'] <= ymax)
+                    (cue_to_rate[cue][side][pop]['senders'] >= ymin) & 
+                    (cue_to_rate[cue][side][pop]['senders'] <= ymax)
                 )
-                cluster_times = angle_to_rate[angle][side][pop]['times'][cluster_mask]
+                cluster_times = cue_to_rate[cue][side][pop]['times'][cluster_mask]
                 
-                # Calculate average firing rate for this interval and angle
+                # Calculate average firing rate for this interval and cue
                 num_cells = end_idx - start_idx
                 firing_rate = len(cluster_times) / (duration * num_cells)
                 rate_matrices[side][i, j] = firing_rate
@@ -1298,9 +1298,9 @@ def plot_tonotopic_heatmaps(
     
     # Define function to set up axes formatting
     def setup_axis(ax):
-        # Set x-axis labels (angles)
-        ax.set_xticks(np.arange(len(angles)))
-        ax.set_xticklabels([f"{angle}°" for angle in angles])
+        # Set x-axis labels (cues)
+        ax.set_xticks(np.arange(len(cues)))
+        ax.set_xticklabels([f"{cue}°" for cue in cues])
         ax.set_xlabel('Azimuth Angle')
         
         # Set y-axis formatting
@@ -1375,7 +1375,7 @@ def plot_tonotopic_heatmaps(
     
     return
 
-def draw_rate_vs_angle_pop_multi(
+def draw_rate_vs_cue_pop_multi(
     
     data_list,                      # list of datasets
     title=None,
@@ -1397,7 +1397,7 @@ def draw_rate_vs_angle_pop_multi(
     if sides is None:
         sides = ["L","R"]
 
-    angles = list(data_list[0]["angle_to_rate"].keys())
+    cues = list(data_list[0]["cue_to_rate"].keys())
 
     # Colors
     if isinstance(color, dict):
@@ -1415,14 +1415,14 @@ def draw_rate_vs_angle_pop_multi(
     # Extract rate curves from each dataset
     # -----------------------------------------------------
     for data in data_list:
-        angle_to_rate = data["angle_to_rate"]
+        cue_to_rate = data["cue_to_rate"]
         duration = data.get(
             "simulation_time",
             data["basesound"].sound.duration / b2.ms
         ) * b2.ms
 
         tot_spikes, avg_neuron_rate, _ = calculate_firing_rates(
-            angle_to_rate, pop, sides, angles, duration, cf_interval
+            cue_to_rate, pop, sides, cues, duration, cf_interval
         )
 
         for s in sides:
@@ -1514,7 +1514,7 @@ def draw_rate_vs_angle_pop_multi(
         pl = label if label else f"{s} (mean)"
 
         ax.errorbar(
-            angles,
+            cues,
             mean_used[s],
             yerr=err_used[s],
             fmt='o-',
@@ -1529,8 +1529,8 @@ def draw_rate_vs_angle_pop_multi(
         ax.legend()
 
     # Aesthetics
-    ax.set_xticks(angles)
-    ax.set_xticklabels([f"{a}°" for a in angles])
+    ax.set_xticks(cues)
+    ax.set_xticklabels([f"{a}°" for a in cues])
     ax.set_xlabel("Azimuth Angle")
     ax.set_ylabel(ylabel_text)
 
@@ -1786,7 +1786,7 @@ def plot_sound(
 
 def draw_spikes_and_psth_bothside(
     res,
-    angle,
+    cue,
     pop,
     y_ax='cf_custom',
     f_ticks=[125, 1000, 10000],
@@ -1809,7 +1809,7 @@ def draw_spikes_and_psth_bothside(
 
     # Build ylim from center_cf + bw_neurons, or default to full range
     if center_cf is not None and bw_neurons is not None:
-        _n_tmp = len(res["angle_to_rate"][angle]["L"][pop]["global_ids"])
+        _n_tmp = len(res["cue_to_rate"][cue]["L"][pop]["global_ids"])
         _cf_tmp = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n_tmp) / b2.Hz
         _, center_idx = take_closest(_cf_tmp, center_cf)
         low_idx  = max(0, center_idx - bw_neurons)
@@ -1818,8 +1818,8 @@ def draw_spikes_and_psth_bothside(
     else:
         ylim = [CFMIN / Hz, CFMAX / Hz]
 
-    L_hrtf_sound = res["sounds"]["l_hrtf_sounds"][angle]
-    R_hrtf_sound = res["sounds"]["r_hrtf_sounds"][angle]
+    L_hrtf_sound = res["sounds"]["left_sounds"][cue]
+    R_hrtf_sound = res["sounds"]["right_sounds"][cue]
 
     # -----------------------------------------------------------------------
     # 5-row LAYOUT
@@ -1946,7 +1946,7 @@ def draw_spikes_and_psth_bothside(
         ("L", ax_raster_L, ax_hist_L),
         ("R", ax_raster_R, ax_hist_R),
     ]:
-        spikes = res["angle_to_rate"][angle][side][pop]
+        spikes = res["cue_to_rate"][cue][side][pop]
 
         times_f, senders_f, cf_full, ymin_idx, ymax_idx, gids = \
             filter_spikes(spikes, xlim, ylim)
@@ -2011,7 +2011,7 @@ def draw_spikes_and_psth_bothside(
     # ===========================================================
     for side in ["L", "R"]:
         color = side_colors[side]
-        spikes = res["angle_to_rate"][angle][side][pop]
+        spikes = res["cue_to_rate"][cue][side][pop]
 
         times_f, _, _, ymin_idx, ymax_idx, _ = filter_spikes(spikes, xlim, ylim)
 
@@ -2034,7 +2034,7 @@ def draw_spikes_and_psth_bothside(
     if title:
         fig.suptitle(title, fontsize=14, fontweight='bold')
 
-def draw_rate_vs_angle(
+def draw_rate_vs_cue(
     data,
     pop='LSO',
     rate=True,
@@ -2049,7 +2049,9 @@ def draw_rate_vs_angle(
     ylim=None,
     label=None,
     error='sem',
-    shaded=True
+    shaded=True,
+    cue_type="angle",
+    xlim=None  # "angle", "itd", or "ild"
 ):
     """
     Unified function:
@@ -2075,7 +2077,7 @@ def draw_rate_vs_angle(
         multi_data = [data]
         multi_mode = False
 
-    angle_to_rate = data["angle_to_rate"]
+    cue_to_rate = data["cue_to_rate"]
     default_duration = (
         data["basesound"].sound.duration / b2.ms
         if "basesound" in data
@@ -2090,9 +2092,9 @@ def draw_rate_vs_angle(
     # center_cf and bw_neurons are provided.
     # ------------------------------------------------------------------
     if center_cf is not None and bw_neurons is not None:
-        # Use the first available angle/side to get the global_ids length
-        _first_angle = list(angle_to_rate.keys())[0]
-        _n_tmp = len(angle_to_rate[_first_angle]["L"][pop if isinstance(pop, str) and pop != "all" else "LSO"]["global_ids"])
+        # Use the first available cue/side to get the global_ids length
+        _first_angle = list(cue_to_rate.keys())[0]
+        _n_tmp = len(cue_to_rate[_first_angle]["L"][pop if isinstance(pop, str) and pop != "all" else "LSO"]["global_ids"])
         _cf_tmp = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n_tmp) / b2.Hz
 
         _, center_idx = take_closest(_cf_tmp, center_cf)
@@ -2135,7 +2137,9 @@ def draw_rate_vs_angle(
 
     def _draw_single_pop_subplot(ax, pop_name):
 
-        angles      = list(angle_to_rate.keys())
+        cues = list(cue_to_rate.keys())
+        # Sort cues numerically to ensure the line plot makes sense
+        cues = sorted(cues)
         sides_local = ["L", "R"] if sides is None else sides
 
         # Side colors
@@ -2151,25 +2155,25 @@ def draw_rate_vs_angle(
         all_avg = {side: [] for side in sides_local}
 
         for d in multi_data:
-            angle_to_rate_d = d["angle_to_rate"]
+            angle_to_rate_d = d["cue_to_rate"]
 
             # Pre-filter by time only (CF is handled inside calculate_firing_rates)
             if time_interval is not None:
                 angle_to_rate_filtered = {}
-                for angle in angles:
-                    angle_to_rate_filtered[angle] = {}
+                for cue in cues:
+                    angle_to_rate_filtered[cue] = {}
                     for side in sides_local:
-                        angle_to_rate_filtered[angle][side] = {}
-                        for p in angle_to_rate_d[angle][side]:
+                        angle_to_rate_filtered[cue][side] = {}
+                        for p in angle_to_rate_d[cue][side]:
                             if p == pop_name:
-                                angle_to_rate_filtered[angle][side][p] = \
+                                angle_to_rate_filtered[cue][side][p] = \
                                     _filter_spike_dict(
-                                        angle_to_rate_d[angle][side][p],
+                                        angle_to_rate_d[cue][side][p],
                                         time_interval
                                     )
                             else:
-                                angle_to_rate_filtered[angle][side][p] = \
-                                    angle_to_rate_d[angle][side][p]
+                                angle_to_rate_filtered[cue][side][p] = \
+                                    angle_to_rate_d[cue][side][p]
                 atr_to_use = angle_to_rate_filtered
             else:
                 atr_to_use = angle_to_rate_d
@@ -2191,7 +2195,7 @@ def draw_rate_vs_angle(
                 atr_to_use,
                 pop_name,
                 sides_local,
-                angles,
+                cues,
                 dur_d,
                 cf_interval,  # always passed; may now be derived from center_cf+bw_neurons
             )
@@ -2258,7 +2262,6 @@ def draw_rate_vs_angle(
         else:
             raise ValueError("Invalid rate option.")
 
-
         # Plot
         if rate in ["diff", "max_norm"]:
             for key, clr, lbl in [
@@ -2268,7 +2271,7 @@ def draw_rate_vs_angle(
                 ("R_pop", "darkgreen",   "Pop_R"),
             ]:
                 if key in plotted_rate:
-                    ax.plot(angles, plotted_rate[key], "o-", color=clr, label=lbl)
+                    ax.plot(cues, plotted_rate[key], "o-", color=clr, label=lbl)
             ax.legend()
 
         else:
@@ -2276,7 +2279,7 @@ def draw_rate_vs_angle(
                 mean_curve = plotted_rate[side]
 
                 ax.plot(
-                    angles,
+                    cues,
                     mean_curve,
                     "o-",
                     color=side_colors.get(side, "k"),
@@ -2288,7 +2291,7 @@ def draw_rate_vs_angle(
 
                     if shaded:
                         ax.fill_between(
-                            angles,
+                            cues,
                             mean_curve - err_curve,
                             mean_curve + err_curve,
                             alpha=0.25,
@@ -2298,7 +2301,7 @@ def draw_rate_vs_angle(
                         )
                     else:
                         ax.errorbar(
-                            angles,
+                            cues,
                             mean_curve,
                             yerr=err_curve,
                             fmt="none",
@@ -2309,11 +2312,47 @@ def draw_rate_vs_angle(
             if label is None:
                 ax.legend()
 
-        # Formatting
-        ax.set_xticks(angles)
-        ax.set_xticklabels([f"{a}°" for a in angles])
-        ax.set_xlabel("Azimuth Angle")
         ax.set_ylabel(ylabel_text)
+
+        # ------------------------------------------------------------------
+        # X-axis ticks, labels, limits
+        # ------------------------------------------------------------------
+        if cue_type == "angle":
+            ax.set_xticks(cues)
+            ax.set_xticklabels([f"{int(c)}°" for c in cues])
+            ax.set_xlabel("Azimuth Angle [deg]")
+            if xlim:
+                ax.set_xlim(xlim)
+
+        elif cue_type == "itd":
+            # Apply xlim first so we know the visible range
+            if xlim:
+                xlim_s = [xlim[0]/1e6, xlim[1]/1e6]
+                ax.set_xlim(xlim_s)
+                visible_cues = [c for c in cues if xlim_s[0] <= c <= xlim_s[1]]
+            else:
+                visible_cues = cues
+
+            # Subsample ticks if too many (target max_ticks)
+            max_ticks = 10
+            if len(visible_cues) > max_ticks:
+                step = math.ceil(len(visible_cues) / max_ticks)
+                visible_cues = visible_cues[::step]
+
+            ax.set_xticks(visible_cues)
+            ax.set_xticklabels(
+                [f"{int(c * 1e6)}" for c in visible_cues],
+                rotation=45,
+                ha='right'
+            )
+            ax.set_xlabel("ITD [µs]")
+
+        elif cue_type == "ild":
+            ax.set_xticks(cues)
+            ax.set_xticklabels([f"{c}" for c in cues])
+            ax.set_xlabel("ILD [dB]")
+            if xlim:
+                ax.set_xlim(xlim)
 
         if ylim:
             ax.set_ylim(ylim)
@@ -2346,7 +2385,7 @@ def draw_rate_vs_angle(
         return ax
 
     # ---- ALL POPS ----
-    pops = ["ANF","SBC", "GBC", "LNTBC", "MNTBC", "MSO", "LSO"] if pop == "all" else list(pop)
+    pops = ["ANF", "SBC", "GBC", "LNTBC", "MNTBC", "MSO", "LSO"] if pop == "all" else list(pop)
 
     n_rows = math.ceil(len(pops) / 3)
     fig, axes = plt.subplots(n_rows, 3, figsize=(18, 4 * n_rows))
@@ -2566,7 +2605,7 @@ def calculate_single_neuron_vector_strength(
         if center_at_peak:
             bin_centers_orig = (orig_bins[:-1] + orig_bins[1:]) / 2
             peak_center = bin_centers_orig[peak_bin_idx]
-            values = np.angle(np.exp(1j * (phases - peak_center)))
+            values = np.cue(np.exp(1j * (phases - peak_center)))
             bins = np.linspace(-np.pi, np.pi, n_bins + 1)
             bin_centers = (bins[:-1] + bins[1:]) / 2
         else:
@@ -2689,8 +2728,8 @@ def draw_mm_norm_multi_dataset(
         labels = [f"Dataset {i+1}" for i in range(len(data_list))]
 
     def _extract_mm_norm(data):
-        angle_to_rate = data["angle_to_rate"]
-        angles = list(angle_to_rate.keys())
+        cue_to_rate = data["cue_to_rate"]
+        cues = list(cue_to_rate.keys())
 
         duration = (
             data.get(
@@ -2701,10 +2740,10 @@ def draw_mm_norm_multi_dataset(
         )
 
         tot, avg, _ = calculate_firing_rates(
-            angle_to_rate,
+            cue_to_rate,
             pop,
             sides_local,
-            angles,
+            cues,
             duration,
             cf_interval,
         )
@@ -2714,22 +2753,22 @@ def draw_mm_norm_multi_dataset(
             r = np.asarray(avg[side])
             mm_norm[side] = (r - r.min()) / (r.max() - r.min())
 
-        return angles, mm_norm
+        return cues, mm_norm
 
-    # --- extract & check angle consistency ---
+    # --- extract & check cue consistency ---
     all_angles = []
     all_norm = []
 
     for data in data_list:
-        angles, norm = _extract_mm_norm(data)
-        all_angles.append(angles)
+        cues, norm = _extract_mm_norm(data)
+        all_angles.append(cues)
         all_norm.append(norm)
 
     for a in all_angles[1:]:
         if a != all_angles[0]:
-            raise ValueError("All datasets must share the same angle grid")
+            raise ValueError("All datasets must share the same cue grid")
 
-    angles = all_angles[0]
+    cues = all_angles[0]
 
     # --- plot ---
     fig, ax = plt.subplots(figsize=figsize)
@@ -2737,7 +2776,7 @@ def draw_mm_norm_multi_dataset(
     for i, norm in enumerate(all_norm):
         for side in sides_local:
             ax.plot(
-                angles,
+                cues,
                 norm[side],
                 marker="o",
                 linestyle="-",
@@ -2746,8 +2785,8 @@ def draw_mm_norm_multi_dataset(
                 label=f"{labels[i]} – {side}",
             )
 
-    ax.set_xticks(angles)
-    ax.set_xticklabels([f"{a}°" for a in angles])
+    ax.set_xticks(cues)
+    ax.set_xticklabels([f"{a}°" for a in cues])
     ax.set_xlabel("Azimuth Angle")
     ax.set_ylabel("Min–Max Normalized Rate")
 
@@ -2796,8 +2835,8 @@ def draw_multi_dataset_raw_rates(
         labels = [f"Dataset {i+1}" for i in range(len(data_list))]
 
     def _extract_rates(data):
-        angle_to_rate = data["angle_to_rate"]
-        angles = list(angle_to_rate.keys())
+        cue_to_rate = data["cue_to_rate"]
+        cues = list(cue_to_rate.keys())
 
         duration = (
             data.get(
@@ -2808,30 +2847,30 @@ def draw_multi_dataset_raw_rates(
         )
 
         _, avg, _ = calculate_firing_rates(
-            angle_to_rate,
+            cue_to_rate,
             pop,
             sides_local,
-            angles,
+            cues,
             duration,
             cf_interval,
         )
 
-        return angles, avg
+        return cues, avg
 
     # --- extract & consistency check ---
     all_angles = []
     all_avg = []
 
     for data in data_list:
-        angles, avg = _extract_rates(data)
-        all_angles.append(angles)
+        cues, avg = _extract_rates(data)
+        all_angles.append(cues)
         all_avg.append(avg)
 
     for a in all_angles[1:]:
         if a != all_angles[0]:
-            raise ValueError("All datasets must share the same angle grid")
+            raise ValueError("All datasets must share the same cue grid")
 
-    angles = all_angles[0]
+    cues = all_angles[0]
 
     # --- plot ---
     fig, ax = plt.subplots(figsize=figsize)
@@ -2839,7 +2878,7 @@ def draw_multi_dataset_raw_rates(
     for i, avg in enumerate(all_avg):
         for side in sides_local:
             ax.plot(
-                angles,
+                cues,
                 avg[side],
                 marker="o",
                 linestyle="-",
@@ -2848,8 +2887,8 @@ def draw_multi_dataset_raw_rates(
                 label=f"{labels[i]} – {side}",
             )
 
-    ax.set_xticks(angles)
-    ax.set_xticklabels([f"{a}°" for a in angles])
+    ax.set_xticks(cues)
+    ax.set_xticklabels([f"{a}°" for a in cues])
     ax.set_xlabel("Azimuth Angle")
     ax.set_ylabel("Avg Firing Rate [Hz]")
 
@@ -2976,7 +3015,7 @@ def _onset_peak(rates, centres, bin_size, prominence=50.0):
 # METRIC COMPUTATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def compute_metrics_for_angle(res, angle, pop,
+def compute_metrics_for_angle(res, cue, pop,
                                xlim_peak=(0, 20), bin_size=0.5,
                                center_cf=None, bw_neurons=None,
                                psth_filtering=False, stim_fs=None,
@@ -2995,9 +3034,9 @@ def compute_metrics_for_angle(res, angle, pop,
     )
 
     rates_L, centres_L = _get_psth_rates(
-        res["angle_to_rate"][angle]["L"][pop], **psth_kwargs)
+        res["cue_to_rate"][cue]["L"][pop], **psth_kwargs)
     rates_R, centres_R = _get_psth_rates(
-        res["angle_to_rate"][angle]["R"][pop], **psth_kwargs)
+        res["cue_to_rate"][cue]["R"][pop], **psth_kwargs)
 
     # ── onset peak ────────────────────────────────────────────────────────────
     t_on_L, fr_on_L = _onset_peak(rates_L, centres_L, bin_size, prominence)
@@ -3062,17 +3101,17 @@ def compute_metrics_for_angle(res, angle, pop,
 
     return out
 
-def compute_lateralization_metrics(res, pop, angles,
+def compute_lateralization_metrics(res, pop, cues,
                                     xlim_peak=(0, 20), bin_size=0.5,
                                     center_cf=None, bw_neurons=None,
                                     psth_filtering=False, stim_fs=None,
                                     smooth_cutoff_hz=None, prominence=50.0):
-    """Sweep angles and stack results into arrays."""
+    """Sweep cues and stack results into arrays."""
     keys = None
     rows = []
-    for angle in angles:
+    for cue in cues:
         m = compute_metrics_for_angle(
-            res, angle, pop,
+            res, cue, pop,
             xlim_peak=xlim_peak, bin_size=bin_size,
             center_cf=center_cf, bw_neurons=bw_neurons,
             psth_filtering=psth_filtering, stim_fs=stim_fs,
@@ -3082,7 +3121,7 @@ def compute_lateralization_metrics(res, pop, angles,
             keys = list(m.keys())
         rows.append(m)
 
-    results = {"angles": np.array(angles)}
+    results = {"cues": np.array(cues)}
     for k in keys:
         results[k] = np.array([r[k] for r in rows])
     return results
@@ -3094,7 +3133,7 @@ def compute_lateralization_metrics(res, pop, angles,
 def plot_lateralization_metrics(metrics,
                                  show_onset_only=False,
                                  show_lr_on_onset=True):
-    angles       = metrics["angles"]
+    cues       = metrics["cues"]
     n_peaks_list = [2, 5, 10]
     avg_styles   = {2: ('--', 'o'), 5: ('-.', 's'), 10: (':', '^')}
     avg_colors   = {2: '#e07b00', 5: '#9400d3', 10: '#007090'}
@@ -3103,7 +3142,7 @@ def plot_lateralization_metrics(metrics,
 
     # ── Panel 0: FR difference ────────────────────────────────────────────────
     ax = axes[0]
-    ax.plot(angles, metrics["fr_onset_diff"], 'o-', color='k',
+    ax.plot(cues, metrics["fr_onset_diff"], 'o-', color='k',
             linewidth=2, label="onset peak")
     ax.axhline(0, color='gray', linestyle=':', linewidth=1)
     ax.axvline(0, color='gray', linestyle=':', linewidth=1)
@@ -3112,14 +3151,14 @@ def plot_lateralization_metrics(metrics,
     if not show_onset_only:
         for n in n_peaks_list:
             ls, mk = avg_styles[n]
-            ax.plot(angles, metrics[f"fr_avg_{n}_diff"],
+            ax.plot(cues, metrics[f"fr_avg_{n}_diff"],
                     linestyle=ls, marker=mk, color=avg_colors[n],
                     linewidth=1.5, label=f"avg first {n} peaks")
     if show_onset_only and show_lr_on_onset:
         ax2 = ax.twinx()
-        ax2.plot(angles, metrics["fr_onset_L"], 's--', color='m',
+        ax2.plot(cues, metrics["fr_onset_L"], 's--', color='m',
                  linewidth=1.5, alpha=0.7, label="L onset FR")
-        ax2.plot(angles, metrics["fr_onset_R"], 's--', color='g',
+        ax2.plot(cues, metrics["fr_onset_R"], 's--', color='g',
                  linewidth=1.5, alpha=0.7, label="R onset FR")
         ax2.set_ylabel("Individual FR [Hz]", color='gray')
         ax2.tick_params(axis='y', labelcolor='gray')
@@ -3128,7 +3167,7 @@ def plot_lateralization_metrics(metrics,
 
     # ── Panel 1: Timing difference ────────────────────────────────────────────
     ax = axes[1]
-    ax.plot(angles, metrics["t_onset_diff"], 'o-', color='k',
+    ax.plot(cues, metrics["t_onset_diff"], 'o-', color='k',
             linewidth=2, label="onset peak")
     ax.axhline(0, color='gray', linestyle=':', linewidth=1)
     ax.axvline(0, color='gray', linestyle=':', linewidth=1)
@@ -3137,7 +3176,7 @@ def plot_lateralization_metrics(metrics,
     if not show_onset_only:
         for n in n_peaks_list:
             ls, mk = avg_styles[n]
-            ax.plot(angles, metrics[f"t_avg_{n}_diff"],
+            ax.plot(cues, metrics[f"t_avg_{n}_diff"],
                     linestyle=ls, marker=mk, color=avg_colors[n],
                     linewidth=1.5, label=f"avg first {n} peaks")
     ax.legend()
@@ -3145,7 +3184,7 @@ def plot_lateralization_metrics(metrics,
     # ── Panel 2: Phase difference ─────────────────────────────────────────────
     ax = axes[2]
     phase_onset_deg = np.degrees(metrics["phase_onset_diff"])
-    ax.plot(angles, phase_onset_deg, 'o-', color='k',
+    ax.plot(cues, phase_onset_deg, 'o-', color='k',
             linewidth=2, label="onset peak")
     ax.axhline(0, color='gray', linestyle=':', linewidth=1)
     ax.axvline(0, color='gray', linestyle=':', linewidth=1)
@@ -3155,22 +3194,22 @@ def plot_lateralization_metrics(metrics,
         for n in n_peaks_list:
             ls, mk = avg_styles[n]
             phase_avg_deg = np.degrees(metrics[f"phase_avg_{n}_diff"])
-            ax.plot(angles, phase_avg_deg,
+            ax.plot(cues, phase_avg_deg,
                     linestyle=ls, marker=mk, color=avg_colors[n],
                     linewidth=1.5, label=f"avg first {n} peaks")
     ax.legend()
-    ax.set_xticks(angles)
+    ax.set_xticks(cues)
 
     plt.tight_layout()
     plt.show()
 
-def plot_psth_per_angle(res, pop, angles,
+def plot_psth_per_angle(res, pop, cues,
                          xlim_peak=(0, 20), bin_size=0.5,
                          center_cf=None, bw_neurons=None,
                          show_onset_only=False,
                          psth_filtering=False, stim_fs=None,
                          smooth_cutoff_hz=None, prominence=20.0):
-    n_angles = len(angles)
+    n_angles = len(cues)
     n_cols   = 1
     n_rows   = int(np.ceil(n_angles / n_cols))
 
@@ -3191,11 +3230,11 @@ def plot_psth_per_angle(res, pop, angles,
 
     side_colors = {'L': 'm', 'R': 'g'}
 
-    for ax_idx, angle in enumerate(angles):
+    for ax_idx, cue in enumerate(cues):
         ax = axes_flat[ax_idx]
 
         for side, color in side_colors.items():
-            spikes = res["angle_to_rate"][angle][side][pop]
+            spikes = res["cue_to_rate"][cue][side][pop]
             rates, centres = _get_psth_rates(spikes, **psth_kwargs)
 
             ax.plot(centres, rates, color=color, alpha=0.8,
@@ -3221,7 +3260,7 @@ def plot_psth_per_angle(res, pop, angles,
 
         ax.set_xlabel("Time [ms]")
         ax.set_ylabel("FR [Hz]")
-        ax.set_title(f"{angle}°")
+        ax.set_title(f"{cue}°")
         ax.legend()
         ax.grid(True, alpha=0.3)
 

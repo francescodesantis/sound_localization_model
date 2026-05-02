@@ -42,7 +42,7 @@ from utils.path_utils import Paths
 from utils.custom_sounds import Tone, ToneBurst
 from utils.log_utils import logger, tqdm
 from utils.cochlea_utils import CFMAX, CFMIN, NUM_CF, AnfResponse
-from utils.hrtf_utils import run_hrtf
+from utils.hrtf_utils import run_hrtf, apply_itd_to_sound, apply_artificial_ild
 
 # --- Setup ---
 COCHLEA_KEY = f"Zilany"
@@ -76,20 +76,34 @@ def resample_binaural_sound(binaural_sound: Sound):
 # =============================================================================
 
 @memory.cache
-def sound_to_spikes(sound, angle, params, plot_spikes=False) -> AnfResponse:
-
-    logger.info(f"[sound_to_spikes] Generating ANF spikes for angle={angle} params={params}")
+def sound_to_spikes(sound, condition_val, params, plot_spikes=False) -> AnfResponse:
 
     hrtf_params = params["hrtf_params"]
+    mode = hrtf_params.get("simulation_mode", "angle")
     rng_seed = params["rng_seed"]
     noise_level = params["omni_noise_level"] * dB
     coch_par = params.get("cochlea_params", {})
     seed(rng_seed)
 
     # --- 1. HRTF ---
-    logger.debug(f"Generating spikes for {sound=} {angle=} {plot_spikes=} {hrtf_params=}")
-    logger.debug("[sound_to_spikes] Running HRTF...")
-    binaural_raw, gated_sound = run_hrtf(sound, angle, hrtf_params)
+    # --- 1. Generate Binaural Sound ---
+    if mode == "angle":
+        # Existing logic: Full HRTF or HRTF-extracted cues
+        logger.info(f"[sound_to_spikes] Generating ANF spikes for angle = {condition_val}°")
+        binaural_raw, gated_sound = run_hrtf(sound, condition_val, hrtf_params)
+    
+    elif mode == "artificial_itd":
+        # condition_val is ITD in seconds
+        logger.info(f"[sound_to_spikes] Generating ANF spikes for ITD = {condition_val*1000000} us")
+        binaural_raw = apply_itd_to_sound(sound.sound, condition_val)
+        gated_sound = sound.sound
+        
+    elif mode == "artificial_ild":
+        # condition_val is ILD in dB
+        logger.info(f"[sound_to_spikes] Generating ANF spikes for ILD = {condition_val} dB")
+        binaural_raw = apply_artificial_ild(sound.sound, condition_val)
+        gated_sound = sound.sound
+
 
     # --- 2. Add noise ---
     logger.debug(f"Binaural sound post-HRTF level={binaural_raw.level}")
@@ -137,8 +151,8 @@ def sound_to_spikes(sound, angle, params, plot_spikes=False) -> AnfResponse:
     return AnfResponse(
         binaural_anf_spiketrain=binaural_IHC_response,
         gated_sound=gated_sound,
-        l_hrtf_sound=L_sound,
-        r_hrtf_sound=R_sound
+        left_sound=L_sound,
+        right_sound=R_sound
     )
 
 def run_repeated_sound_psth(

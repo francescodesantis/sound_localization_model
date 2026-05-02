@@ -17,6 +17,42 @@ import pysofaconventions as sofa
 from scipy.fft import rfft, irfft
 import matplotlib.pyplot as plt
 
+def load_hrir(subject_id: int, azimuth_deg: float):
+    """
+    Load left/right HRIR for a given subject and azimuth (elevation = 0°).
+
+    Returns
+    -------
+    left_ir, right_ir : np.ndarray
+    sofa_fs           : float
+    """
+
+    files = sorted(
+        f for f in os.listdir(Paths.SOFA_DIR)
+        if f.lower().endswith(".sofa")
+    )
+
+    sofa_path = os.path.join(Paths.SOFA_DIR, files[subject_id])
+    sofa_file = sofa.SOFAFile(sofa_path, "r")
+
+    ir = sofa_file.getDataIR()                     # (M, R, N)
+    positions = sofa_file.getSourcePositionValues()  # (M, C)
+
+    az = positions[:, 0]
+    el = positions[:, 1]
+
+    az_target = azimuth_deg
+
+    # Find closest measurement (elevation fixed to 0)
+    dist = np.sqrt((az - az_target)**2 + (el - 0)**2)
+    m_idx = int(np.argmin(dist))
+
+    left_ir  = ir[m_idx, 0, :]
+    right_ir = ir[m_idx, 1, :]
+
+    sofa_fs = float(np.array(sofa_file.getSamplingRate()).ravel()[0])
+
+    return left_ir, right_ir, sofa_fs
 
 def load_hrtf_subject(subj: int):
     # --- List and sort all .sofa files directly from the directory ---
@@ -180,7 +216,7 @@ def apply_ild_to_sound(sofa_file, sound: Sound, azimuth_deg: float) -> Sound:
 
 def run_hrtf(
     sound,
-    angle: float,
+    condition_val: float,
     hrtf_params
 ):
     """
@@ -196,7 +232,7 @@ def run_hrtf(
     binaural_sound : Sound (stereo)
     sound          : Sound (mono, possibly preprocessed)
     """
-
+    angle = condition_val
     logger.debug(f"[run_hrtf] Starting for angle={angle}")
 
     subj = hrtf_params["subj_number"]
@@ -255,42 +291,20 @@ def run_hrtf(
     else:
         raise ValueError(f"Unknown cue_to_apply: {cue}")
     
-def load_hrir(subject_id: int, azimuth_deg: float):
-    """
-    Load left/right HRIR for a given subject and azimuth (elevation = 0°).
+def apply_artificial_ild(sound: Sound, ild_db: float) -> Sound:
+    """Applies a pure gain difference to a mono sound."""
+    fs = float(sound.samplerate)
+    left = sound.copy()
+    right = sound.copy()
+    
+    # Apply half the ILD to each side (one up, one down) or relative to 0
+    left.level += ild_db / 2.0
+    right.level -= ild_db / 2.0
+    
+    stereo = np.column_stack([np.asarray(left).flatten(), np.asarray(right).flatten()])
+    return Sound(stereo, samplerate=fs*Hz)
 
-    Returns
-    -------
-    left_ir, right_ir : np.ndarray
-    sofa_fs           : float
-    """
-
-    files = sorted(
-        f for f in os.listdir(Paths.SOFA_DIR)
-        if f.lower().endswith(".sofa")
-    )
-
-    sofa_path = os.path.join(Paths.SOFA_DIR, files[subject_id])
-    sofa_file = sofa.SOFAFile(sofa_path, "r")
-
-    ir = sofa_file.getDataIR()                     # (M, R, N)
-    positions = sofa_file.getSourcePositionValues()  # (M, C)
-
-    az = positions[:, 0]
-    el = positions[:, 1]
-
-    az_target = azimuth_deg
-
-    # Find closest measurement (elevation fixed to 0)
-    dist = np.sqrt((az - az_target)**2 + (el - 0)**2)
-    m_idx = int(np.argmin(dist))
-
-    left_ir  = ir[m_idx, 0, :]
-    right_ir = ir[m_idx, 1, :]
-
-    sofa_fs = float(np.array(sofa_file.getSamplingRate()).ravel()[0])
-
-    return left_ir, right_ir, sofa_fs
+#------------------- PLOT ---------------------------------------
 
 def plot_hrir(subject_id: int, azimuth_deg: float, target_fs=None):
     """
