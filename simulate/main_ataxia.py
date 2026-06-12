@@ -13,7 +13,7 @@ from utils.anf_utils import ZI_COC_KEY, CI_COC_KEY, create_sound_key, load_anf_r
 from utils.cochlea_utils import ANGLES
 from utils.path_utils import Paths, save_current_conf
 from models.BrainstemModel.BrainstemModel import BrainstemModel
-from models.BrainstemModel.params_gerbils import Parameters as params
+from models.BrainstemModel.params_ataxia import Parameters as params
 from utils.custom_sounds import Click, Tone, ToneBurst, WhiteNoise, Click_Train, HarmonicComplex
 from utils.log_utils import logger, tqdm
 
@@ -60,17 +60,17 @@ def create_save_result_object(
 
 if __name__ == "__main__":
 
-    TIME_SIMULATION = 60
-    TIME_ON = 50
+    TIME_SIMULATION = 100
+    TIME_ON = 100
     TIME_OFF = TIME_SIMULATION - TIME_ON 
     RAMP_MS = 5     
-    LEVEL = 60
+    LEVEL = 55
 
     inputs = [
+        Tone(17.6 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
         # Tone(16 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
-        #Click(duration=TIME_SIMULATION * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB),  
-    Tone(0.25 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
-    # Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
+        # # Click(duration=TIME_SIMULATION * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB),  
+        # Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=4*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=3*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=2*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     ]
 
     # CONFIGURATION
-    MODE = "artificial_itd"  # options: "angle", "artificial_itd", "artificial_ild"
+    MODE = "artificial_ild_exp"  # options: "angle", "artificial_itd", "artificial_ild"
     
     if MODE == "angle":
         loop_range = ANGLES
@@ -93,33 +93,40 @@ if __name__ == "__main__":
         #loop_range = np.linspace(-1000, 1000, 11) * 1e-6   # us to seconds
     elif MODE == "artificial_ild":
         loop_range = np.linspace(-25, 25, 11) # dB
+    elif MODE == "artificial_ild_exp":
+        loop_range = np.linspace(0, 90, 19) # dB
 
     experiment_folder = MODE 
     models = [BrainstemModel]
     cochlea_key = ZI_COC_KEY
 
     ps = []
+    we = 2
+    wi = -30
+    for c in [11.8, 22.72, 14.18]:
+        p = params(f"{we}_{wi}&c_{c}")
+        p.SYN_WEIGHTS.MNTBCs2LSO = wi
+        p.SYN_WEIGHTS.SBCs2LSO = we
+        p.MEMB_CAPS.MNTBC = c 
+        p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
+        ps.append(p)
+    # for we, wi in  [(1, -10)]:
+    #     p = params(f"{we}_{wi}")
+    #     p.SYN_WEIGHTS.MNTBCs2LSO = wi
+    #     p.SYN_WEIGHTS.SBCs2LSO = we
+    #     p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
+    #     ps.append(p)
 
-    # for m in ['itd_only', 'ild_only']:
-    #     seed = 0
+    # for d in [1.28, 1.78]: #ms
     #     rng = 42 + seed
-    #     p = params(f"{m}")
+    #     p = params(f"seed_{rng}_delay_{d}")
     #     p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
     #     p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
-    # p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
-    #     p.cochlea[ZI_COC_KEY]['hrtf_params']['cue_to_apply'] = m
-    # ps.append(p)
+    #     p.SYN_DELAYS.MNTBCs2LSO = d
+    #     p.SYN_DELAYS.MNTBCs2MSO = d
+    #     p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
+    #     ps.append(p)
 
-    for seed in [0]:
-        for d in [0.78]:
-            rng = 42 + seed
-            p = params(f"delay_{d}_seed_{seed}_x")
-            p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
-            p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
-            p.SYN_DELAYS.MNTBCs2MSO = d
-            p.SYN_DELAYS.MNTBCs2LSO = d
-            p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
-            ps.append(p)
 
 
     num_runs = len(inputs) * len(ps)
