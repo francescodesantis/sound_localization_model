@@ -9,10 +9,10 @@ ANF_SPIKETRAINS
 results/*
 **/*.pic
 myoga_cache
-data/**/**
-data/Dimensions.xlsx
 secrets
 .python-version
 results
 .DS_Store
 simulate/jobs/*
+external/cochlea-1/*
+cochlea-1
