@@ -42,6 +42,22 @@ for pop in populations:
 SIM_DURATION = 50.0
 VIEW_WINDOW  = 10.0
 
+NEURON_RANGES = {
+    "C_m":          (0,    500),
+    "g_L":          (0,     50),
+    "E_L":          (-90,  -50),
+    "V_m":          (-90,  -50),
+    "V_reset":      (-90,  -50),
+    "V_th":         (-70,  -40),
+    "t_ref":        (0,     10),
+    "E_ex":         (-20,   20),
+    "tau_rise_ex":  (0,     10),
+    "tau_decay_ex": (0,     10),
+    "E_in":         (-90,  +90),
+    "tau_rise_in":  (0,     10),
+    "tau_decay_in": (0,     10),
+}
+
 # ==========================================================
 # HELPER
 # ==========================================================
@@ -51,8 +67,6 @@ def make_pre_spike_times(base_times, num_inputs, delta=0.0):
 
 # ==========================================================
 # SIMULATION
-# weights_ex / weights_in : list of per-input weights (length == n_ex/n_in)
-# delays_ex  / delays_in  : list of per-input delays
 # ==========================================================
 
 def simulate(population, spike_string, n_ex, n_in,
@@ -186,7 +200,7 @@ class App:
         ctrl_outer = ttk.Frame(root)
         ctrl_outer.grid(row=0, column=0, sticky="ns")
 
-        self._canvas = tk.Canvas(ctrl_outer, width=380, highlightthickness=0)
+        self._canvas = tk.Canvas(ctrl_outer, width=400, highlightthickness=0)
         self._sb     = ttk.Scrollbar(ctrl_outer, orient="vertical",
                                      command=self._canvas.yview)
         self._canvas.configure(yscrollcommand=self._sb.set)
@@ -226,7 +240,6 @@ class App:
 
         ttk.Separator(ctrl, orient="horizontal").pack(fill="x", pady=5)
 
-        # N spinboxes — changing them rebuilds the syn panel
         self.n_ex = self._spinbox(ctrl, "N excitatory", default=2,
                                   callback=self._rebuild_syn_panel)
         self.n_in = self._spinbox(ctrl, "N inhibitory", default=0,
@@ -234,44 +247,80 @@ class App:
 
         ttk.Separator(ctrl, orient="horizontal").pack(fill="x", pady=3)
 
-        # dynamic synaptic panel
         self.syn_frame = ttk.Frame(ctrl)
         self.syn_frame.pack(fill="x")
-        self.syn_widgets = {}   # key -> tk.DoubleVar
+        self.syn_widgets = {}
         self._rebuild_syn_panel()
 
         ttk.Separator(ctrl, orient="horizontal").pack(fill="x", pady=5)
-        ttk.Label(ctrl, text="Neuron parameters",
-                  font=("", 9, "bold")).pack(anchor="w")
+
+        # neuron params header with restore button
+        neuron_hdr = ttk.Frame(ctrl)
+        neuron_hdr.pack(fill="x", pady=(0, 2))
+        ttk.Label(neuron_hdr, text="Neuron parameters",
+                  font=("", 9, "bold")).pack(side="left", anchor="w")
+        ttk.Button(neuron_hdr, text="↺ Restore defaults",
+                   command=self._restore_neuron_defaults).pack(side="right")
+
         self.neuron_frame = ttk.Frame(ctrl)
         self.neuron_frame.pack(fill="x")
-        self.neuron_sliders = {}
+        self.neuron_sliders = {}   # name -> tk.DoubleVar
         self._build_neuron_sliders(populations[0])
 
         self.run()
 
     # -------------------------------------------------------
-    def _slider(self, parent, label, lo, hi, default, integer=False):
+    # Shared slider + entry factory (used for both syn and neuron params)
+    # -------------------------------------------------------
+    def _slider_with_entry(self, parent, label, lo, hi, default, label_width=13):
+        """Slider + editable entry, bidirectionally synced. Returns tk.DoubleVar."""
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=1)
-        ttk.Label(frame, text=label, width=13, anchor="w").pack(side="left")
+
+        ttk.Label(frame, text=label, width=label_width, anchor="w").pack(side="left")
+
         var = tk.DoubleVar(value=default)
-        sl  = ttk.Scale(frame, from_=lo, to=hi, variable=var, orient="horizontal")
+
+        sl = ttk.Scale(frame, from_=lo, to=hi, variable=var, orient="horizontal")
         sl.pack(side="left", fill="x", expand=True)
-        lbl = ttk.Label(frame, width=7,
-                        text=str(int(default)) if integer else f"{default:.2f}")
-        lbl.pack(side="left")
 
-        def _update(_=None):
-            v = round(var.get()) if integer else var.get()
-            lbl.config(text=str(v) if integer else f"{v:.2f}")
+        entry_var = tk.StringVar(value=f"{default:.3f}")
+        entry = ttk.Entry(frame, textvariable=entry_var, width=7, justify="right")
+        entry.pack(side="left", padx=(3, 0))
 
-        def _release(_=None):
-            _update()
+        _updating = [False]
+
+        def _slider_moved(_=None):
+            if _updating[0]:
+                return
+            _updating[0] = True
+            entry_var.set(f"{var.get():.3f}")
+            _updating[0] = False
+
+        def _slider_released(_=None):
+            _slider_moved()
             self.run()
 
-        sl.bind("<Motion>",          _update)
-        sl.bind("<ButtonRelease-1>", _release)
+        sl.bind("<Motion>",          _slider_moved)
+        sl.bind("<ButtonRelease-1>", _slider_released)
+
+        def _entry_commit(_=None):
+            if _updating[0]:
+                return
+            try:
+                v = float(entry_var.get().strip())
+                v = max(lo, min(hi, v))
+                _updating[0] = True
+                var.set(v)
+                entry_var.set(f"{v:.3f}")
+                _updating[0] = False
+                self.run()
+            except ValueError:
+                entry_var.set(f"{var.get():.3f}")
+
+        entry.bind("<Return>",   _entry_commit)
+        entry.bind("<FocusOut>", _entry_commit)
+
         return var
 
     def _spinbox(self, parent, label, default=0, callback=None):
@@ -293,7 +342,6 @@ class App:
     # Dynamic synaptic controls
     # -------------------------------------------------------
     def _rebuild_syn_panel(self):
-        """Rebuild weight/delay sliders depending on N_ex and N_in."""
         for w in self.syn_frame.winfo_children():
             w.destroy()
         self.syn_widgets.clear()
@@ -304,42 +352,39 @@ class App:
         except Exception:
             return
 
-        # --- excitatory ---
         if n_ex > 0:
             ttk.Label(self.syn_frame, text="— Excitatory —",
                       font=("", 8, "italic")).pack(anchor="w")
             if n_ex == 2:
                 for i in (1, 2):
-                    self.syn_widgets[f"w_ex{i}"] = self._slider(
-                        self.syn_frame, f"w_ex {i}", 0, 50, 5)
-                    self.syn_widgets[f"d_ex{i}"] = self._slider(
+                    self.syn_widgets[f"w_ex{i}"] = self._slider_with_entry(
+                        self.syn_frame, f"w_ex {i}", 0, 300, 5)
+                    self.syn_widgets[f"d_ex{i}"] = self._slider_with_entry(
                         self.syn_frame, f"delay_ex {i}", 0.1, 5, 1)
             else:
-                self.syn_widgets["w_ex"] = self._slider(
-                    self.syn_frame, "w_ex", 0, 50, 5)
-                self.syn_widgets["d_ex"] = self._slider(
+                self.syn_widgets["w_ex"] = self._slider_with_entry(
+                    self.syn_frame, "w_ex", 0, 300, 5)
+                self.syn_widgets["d_ex"] = self._slider_with_entry(
                     self.syn_frame, "delay_ex", 0.1, 5, 1)
 
-        # --- inhibitory ---
         if n_in > 0:
             ttk.Label(self.syn_frame, text="— Inhibitory —",
                       font=("", 8, "italic")).pack(anchor="w")
             if n_in == 2:
                 for i in (1, 2):
-                    self.syn_widgets[f"w_in{i}"] = self._slider(
-                        self.syn_frame, f"w_in {i}", -50, 0, -5)
-                    self.syn_widgets[f"d_in{i}"] = self._slider(
+                    self.syn_widgets[f"w_in{i}"] = self._slider_with_entry(
+                        self.syn_frame, f"w_in {i}", -300, 0, -5)
+                    self.syn_widgets[f"d_in{i}"] = self._slider_with_entry(
                         self.syn_frame, f"delay_in {i}", 0.1, 5, 1)
             else:
-                self.syn_widgets["w_in"] = self._slider(
-                    self.syn_frame, "w_in", -50, 0, -5)
-                self.syn_widgets["d_in"] = self._slider(
+                self.syn_widgets["w_in"] = self._slider_with_entry(
+                    self.syn_frame, "w_in", -300, 0, -5)
+                self.syn_widgets["d_in"] = self._slider_with_entry(
                     self.syn_frame, "delay_in", 0.1, 5, 1)
 
         self.run()
 
     def _get_syn_lists(self):
-        """Return (weights_ex, delays_ex, weights_in, delays_in) as lists."""
         n_ex = self.n_ex.get()
         n_in = self.n_in.get()
         sw   = self.syn_widgets
@@ -365,29 +410,25 @@ class App:
         return weights_ex, delays_ex, weights_in, delays_in
 
     # -------------------------------------------------------
+    # Neuron parameter controls
+    # -------------------------------------------------------
     def _build_neuron_sliders(self, pop):
         for w in self.neuron_frame.winfo_children():
             w.destroy()
         self.neuron_sliders.clear()
-        overrides = {
-            "C_m":          (0,    500),
-            "g_L":          (0,     50),
-            "E_L":          (-90,  -50),
-            "V_m":          (-90,  -50),
-            "V_reset":      (-90,  -50),
-            "V_th":         (-70,  -40),
-            "t_ref":        (0,     10),
-            "E_ex":         (-20,   20),
-            "tau_rise_ex":  (0,     10),
-            "tau_decay_ex": (0,     10),
-            "E_in":         (-90,  -50),
-            "tau_rise_in":  (0,     10),
-            "tau_decay_in": (0,     10),
-        }
+
         for name, val in all_params[pop].items():
-            lo, hi = overrides[name]
-            self.neuron_sliders[name] = self._slider(
+            lo, hi = NEURON_RANGES[name]
+            self.neuron_sliders[name] = self._slider_with_entry(
                 self.neuron_frame, name, lo=lo, hi=hi, default=val)
+
+    def _restore_neuron_defaults(self):
+        """Reset all neuron sliders/entries to the params-file values for the current population."""
+        pop = self.pop_var.get()
+        for name, var in self.neuron_sliders.items():
+            var.set(all_params[pop][name])
+        # entry fields update automatically via the var trace in _slider_with_entry
+        self.run()
 
     def on_pop_change(self, _=None):
         self._build_neuron_sliders(self.pop_var.get())
@@ -480,7 +521,6 @@ class App:
 
             self.canvas.draw()
 
-            # update spike readout
             if len(post_spikes):
                 spike_str = ",  ".join(f"{t:.2f}" for t in post_spikes)
                 self._spike_readout.config(text=spike_str)
