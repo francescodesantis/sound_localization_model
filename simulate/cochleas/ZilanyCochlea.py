@@ -42,7 +42,7 @@ from utils.path_utils import Paths
 from utils.custom_sounds import Tone, ToneBurst
 from utils.log_utils import logger, tqdm
 from utils.cochlea_utils import CFMAX, CFMIN, NUM_CF, AnfResponse
-from utils.hrtf_utils import run_hrtf, apply_itd_to_sound, apply_artificial_ild
+from utils.hrtf_utils import run_hrtf, apply_itd_to_sound, apply_artificial_ild, apply_artificial_ild_exp
 
 # --- Setup ---
 COCHLEA_KEY = f"Zilany"
@@ -81,7 +81,7 @@ def sound_to_spikes(sound, condition_val, params, plot_spikes=False) -> AnfRespo
     hrtf_params = params["hrtf_params"]
     mode = hrtf_params.get("simulation_mode", "angle")
     rng_seed = params["rng_seed"]
-    noise_level = params["omni_noise_level"] * dB
+    # noise_level = params["omni_noise_level"] * dB
     coch_par = params.get("cochlea_params", {})
     seed(rng_seed)
 
@@ -104,11 +104,20 @@ def sound_to_spikes(sound, condition_val, params, plot_spikes=False) -> AnfRespo
         binaural_raw = apply_artificial_ild(sound.sound, condition_val)
         gated_sound = sound.sound
 
+    elif mode == "artificial_ild_exp":
+        # condition_val is ILD in dB
+        logger.info(f"[sound_to_spikes] Generating ANF spikes for ILD exp = {condition_val} dB")
+        binaural_raw = apply_artificial_ild_exp(sound.sound, condition_val)
+        gated_sound = sound.sound
+
+
 
     # --- 2. Add noise ---
+    logger.debug(f"Gated sound level={gated_sound.level}")
     logger.debug(f"Binaural sound post-HRTF level={binaural_raw.level}")
-    noise = Sound.whitenoise(binaural_raw.duration).atlevel(noise_level)
-    binaural_sound = resample_binaural_sound(binaural_raw + noise)
+    # noise = Sound.whitenoise(binaural_raw.duration).atlevel(noise_level)
+    # binaural_sound = resample_binaural_sound(binaural_raw + noise)
+    binaural_sound = resample_binaural_sound(binaural_raw)
 
     L_sound = binaural_sound.left
     R_sound = binaural_sound.right

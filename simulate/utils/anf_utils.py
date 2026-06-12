@@ -51,6 +51,7 @@ def create_sound_key(sound):
     elif type(sound) is Click_Train:
         sound_type = "click_train"
         level = round(sound.peak)
+        add_info = f"interval_{sound.interval}"
     elif type(sound) is HarmonicComplex:
         sound_type = "harmonic"
     else:

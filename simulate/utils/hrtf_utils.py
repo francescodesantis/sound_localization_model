@@ -166,24 +166,29 @@ def estimate_itd_from_hrir(left_ir, right_ir, fs):
 def apply_itd_to_sound(sound: Sound, itd_sec: float) -> Sound:
     """
     Apply pure ITD to mono sound by delaying one channel.
+    Output is (n + delay_samples) long — both channels have identical energy.
     """
-
     fs = float(sound.samplerate)
     x = np.asarray(sound).flatten()
-
     delay_samples = int(round(abs(itd_sec) * fs))
 
+    if delay_samples == 0:
+        stereo = np.column_stack([x, x])
+        return Sound(stereo, samplerate=fs * Hz)
+
+    pad = np.zeros(delay_samples)
+
     if itd_sec < 0:
-        # left leads → delay right
-        left  = x
-        right = np.pad(x, (delay_samples, 0))[:len(x)]
+        # left leads → right is delayed
+        left  = np.concatenate([x,   pad])  # signal then silence
+        right = np.concatenate([pad, x  ])  # silence then signal
     else:
-        # right leads → delay left
-        left  = np.pad(x, (delay_samples, 0))[:len(x)]
-        right = x
+        # right leads → left is delayed
+        left  = np.concatenate([pad, x  ])
+        right = np.concatenate([x,   pad])
 
     stereo = np.column_stack([left, right])
-    return Sound(stereo, samplerate=fs*Hz)
+    return Sound(stereo, samplerate=fs * Hz)
 
 def apply_ild_to_sound(sofa_file, sound: Sound, azimuth_deg: float) -> Sound:
     """
@@ -298,9 +303,22 @@ def apply_artificial_ild(sound: Sound, ild_db: float) -> Sound:
     right = sound.copy()
     
     # Apply half the ILD to each side (one up, one down) or relative to 0
-    left.level += ild_db / 2.0
-    right.level -= ild_db / 2.0
+    left.level -= ((ild_db / 2.0) * dB)
+    right.level += ((ild_db / 2.0) * dB)
     
+    stereo = np.column_stack([np.asarray(left).flatten(), np.asarray(right).flatten()])
+    return Sound(stereo, samplerate=fs*Hz)
+
+def apply_artificial_ild_exp(sound: Sound, lev_db: float) -> Sound:
+    """Applies a pure gain difference to a mono sound."""
+    fs = float(sound.samplerate)
+    left = sound.copy()
+    right = sound.copy()
+    right.level = lev_db * dB
+    logger.debug(
+    f"Right Sound Level: {right.level} dB\n"
+    f"Left Sound Level: {left.level} dB\n"
+    )
     stereo = np.column_stack([np.asarray(left).flatten(), np.asarray(right).flatten()])
     return Sound(stereo, samplerate=fs*Hz)
 
