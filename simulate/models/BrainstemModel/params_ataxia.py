@@ -37,7 +37,7 @@ class Parameters:
                         "simulation_mode": "angle", #  "angle", "artificial_itd", "artificial_ild"
                         "artificial_itd": 0.0,      # in seconds (e.g. 0.0005 for 500us)
                         "artificial_ild": 0.0,      # in dB
-                        "artificial_ild_exp": 0.0, 
+                        "artificial_ild_exp": 0.0,      # in dB
                         "cue_to_apply": "HRTF", #if mode = angle, possibility to apply "HRTF", "itd_only", "ild_only"
                     },
                     "cochlea_params": {
@@ -86,7 +86,7 @@ class Parameters:
         SBCs2LSOs: int = 40
         MNTBCs2LSOs: int = 8
         SBCs2MSOs: int = 3
-        MNTBCs2MSOs: int = 3#2    
+        MNTBCs2MSOs: int = 2    
         LNTBCs2MSOs: int = 1
         MNTBCs2SPNs: int = 4  
 
@@ -106,7 +106,7 @@ class Parameters:
         MNTBCs2LSO: float = -2.3 #tuned for a single spike
         #
         SBCs2MSO: float = 6 #12.0 
-        MNTBCs2MSO: float = -10.0 #-15
+        MNTBCs2MSO: float = -15.0 
         LNTBCs2MSO: float = 0 
         #
         MNTBCs2SPN: float = -40.0 
@@ -140,7 +140,7 @@ class Parameters:
         SBC: float = 26.0 
         GBC: float = 13.0
         LNTBC: float = 12.0   
-        MNTBC: float = 18.9
+        MNTBC: float = 18.9 #22.72 wt #14.18 hom #%11,8
         LSO: float = 12.0
         MSO: float = 70.0
         SPN: float = 75.0
@@ -154,7 +154,7 @@ class Parameters:
         GBC: float = 86.6   # tau = 0.15 ms
         LNTBC: float = 3 # tau = 4 ms  
         MNTBC: float = 9 # tau = 4 ms 
-        LSO: float = 18.75 # tau = 0.64 ms (#24 # tau = 0.5 ms)
+        LSO: float = 24 # tau = 0.5 ms
         MSO: float = 70 # tau = 1 ms   
         SPN: float = 75 # tau = 1 ms  
 
@@ -231,9 +231,9 @@ class Parameters:
         SBC: float = 0.2       
         GBC: float = 0.2       
         LNTBC: float = 0.25     
-        MNTBC: float = 0.1  
-        LSO: float = 0.2    
-        MSO: float = 0.5
+        MNTBC: float = 0.1  #0.3 wt
+        LSO: float = 0.5    
+        MSO: float = 0.5 #0.15
         SPN: float = 0.5        
     # ------------------------------------------------------------ 
     @dataclass
@@ -241,9 +241,9 @@ class Parameters:
         SBC: float = 0.5       
         GBC: float = 0.5       
         LNTBC: float = 3.8     
-        MNTBC: float = 0.17    
-        LSO: float = 0.5#1
-        MSO: float = 1.0
+        MNTBC: float = 0.17    #0.77 wt
+        LSO: float = 1.0
+        MSO: float = 1.0#0.3
         SPN: float = 1.0
     
     # ------------------------------------------------------------
@@ -255,7 +255,7 @@ class Parameters:
         GBC: float = -75.0
         LNTBC: float = -75.0   
         MNTBC: float = -75.0
-        LSO: float = -90
+        LSO: float = -75.0
         MSO: float = -75.0
         SPN: float = -20.0
 
