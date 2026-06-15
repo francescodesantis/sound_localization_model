@@ -13,7 +13,7 @@ from utils.anf_utils import ZI_COC_KEY, CI_COC_KEY, create_sound_key, load_anf_r
 from utils.cochlea_utils import ANGLES
 from utils.path_utils import Paths, save_current_conf
 from models.BrainstemModel.BrainstemModel import BrainstemModel
-from models.BrainstemModel.params_gerbils import Parameters as params
+from simulate.models.BrainstemModel.params import Parameters as params
 from utils.custom_sounds import Click, Tone, ToneBurst, WhiteNoise, Click_Train, HarmonicComplex
 from utils.log_utils import logger, tqdm
 

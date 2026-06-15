@@ -11,7 +11,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-from simulate.models.BrainstemModel.params import Parameters as params
+from models.BrainstemModel.params import Parameters as params
 
 # ==========================================================
 # LOAD PARAMETERS
