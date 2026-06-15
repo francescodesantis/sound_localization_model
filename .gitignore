@@ -14,5 +14,20 @@ secrets
 results
 .DS_Store
 simulate/jobs/*
-external/cochlea-1/*
-cochlea-1
+cat > external/cochlea-1/.gitignore << 'EOF'
+# Compiled extensions
+*.so
+*.pyd
+
+# Cython-generated C files
+*.c
+
+# Build directory
+build/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+EOF
+
