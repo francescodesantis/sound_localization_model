@@ -196,7 +196,6 @@ def apply_ild_to_sound(sofa_file, sound: Sound, azimuth_deg: float) -> Sound:
     Uses apply_sofa_hrtf_to_sound to measure per-ear level,
     then returns two copies of the original mono sound with those absolute levels.
     """
-
     # --- Apply full HRTF to measure per-ear levels ---
     binaural_sound = apply_sofa_hrtf_to_sound(
         sofa_file=sofa_file,
@@ -285,11 +284,10 @@ def run_hrtf(
     elif cue == "ild_only":
         logger.debug("[run_hrtf] Applying ILD only")
         sofa_file = load_hrtf_subject(subj)
-        binaural_sound, sound = apply_ild_to_sound(
+        binaural_sound = apply_ild_to_sound(
             sofa_file=sofa_file,
             sound=sound,
             azimuth_deg=ANGLE_TO_SOFA[angle],
-            elevation_deg=0.0,
         )
         return binaural_sound, sound
 
