@@ -396,20 +396,7 @@ class BrainstemModel(SpikingModel):
 
     def simulate(self, time: Union[float, int]):
         # split in time chunks
-        TIME_PER_CHUNK_TQDM = 50
-        chunks = time // TIME_PER_CHUNK_TQDM
-        logger.debug(
-            f"running simulation for {chunks} chunks of {TIME_PER_CHUNK_TQDM}ms each"
-        )
-
-        for chunk in tqdm(
-            [
-                *([TIME_PER_CHUNK_TQDM] * chunks),
-                time - chunks * TIME_PER_CHUNK_TQDM,
-            ],
-            desc="  ⮡ simulation",
-        ):
-            nest.Simulate(chunk)
+        nest.Simulate(time)
         logger.debug(f"total bio time elapsed: {nest.biological_time}")
 
     def analyze(self):

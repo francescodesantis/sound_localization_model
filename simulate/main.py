@@ -70,7 +70,7 @@ if __name__ == "__main__":
         # Tone(16 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
         #Click(duration=TIME_SIMULATION * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB),  
     Tone(0.25 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
-    # Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
+    #Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=4*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=3*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=2*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     ]
 
     # CONFIGURATION
-    MODE = "artificial_itd"  # options: "angle", "artificial_itd", "artificial_ild"
+    MODE = "angle"  # options: "angle", "artificial_itd", "artificial_ild"
     
     if MODE == "angle":
         loop_range = ANGLES
@@ -100,26 +100,30 @@ if __name__ == "__main__":
 
     ps = []
 
-    # for m in ['itd_only', 'ild_only']:
-    #     seed = 0
+    for m in ['itd_only', 'HRTF']:
+        seed = 0
+        rng = 42 + seed
+        p = params(f"{m}")
+        p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
+        p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
+        p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
+        p.cochlea[ZI_COC_KEY]['hrtf_params']['cue_to_apply'] = m
+        ps.append(p)
+
+    # for seed in range(10,20):
     #     rng = 42 + seed
-    #     p = params(f"{m}")
+    #     p = params(f"seed{seed}")
     #     p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
     #     p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
-    # p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
-    #     p.cochlea[ZI_COC_KEY]['hrtf_params']['cue_to_apply'] = m
-    # ps.append(p)
-
-    for seed in [0]:
-        for d in [0.78]:
-            rng = 42 + seed
-            p = params(f"delay_{d}_seed_{seed}_x")
-            p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
-            p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
-            p.SYN_DELAYS.MNTBCs2MSO = d
-            p.SYN_DELAYS.MNTBCs2LSO = d
-            p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
-            ps.append(p)
+    #     p.POP_CONV.MNTBCs2MSOs = 2
+    #     p.SYN_WEIGHTS.MNTBCs2MSO = -15
+    #     p.E_L.MSO = -55
+    #     p.V_RESET.MSO = -57
+    #     p.INH_REV.MSO = -75
+    #     p.TAUS_EX_RISE.MSO = 0.5
+    #     p.TAUS_EX_DECAY.MSO = 1.0
+    #     p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
+    #     ps.append(p)
 
 
     num_runs = len(inputs) * len(ps)

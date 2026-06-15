@@ -1301,6 +1301,9 @@ def draw_spikes_and_psth_bothside(
         ax_hist.set_ylim(ax_raster.get_ylim())
         ax_hist.set_xlabel(xlabel)
         ax_hist.tick_params(axis='y', labelleft=False)
+        x_max = max(ax_hist_L.get_xlim()[1], ax_hist_R.get_xlim()[1])
+        ax_hist_L.set_xlim(0, x_max)
+        ax_hist_R.set_xlim(0, x_max)
 
     # ===========================================================
     # PSTH
@@ -1333,7 +1336,8 @@ def draw_spikes_and_psth_bothside(
 def draw_rate_vs_cue(
     data,
     pop='LSO',
-    rate='avg',          
+    rate='avg', 
+    side = None,         
     cf_interval=None,
     time_interval=None,
     target_cf_hz=None,
@@ -1423,10 +1427,15 @@ def draw_rate_vs_cue(
         effective_duration = duration
 
     # ------------------------------------------------------------------
-    def _draw_single_pop_subplot(ax, pop_name):
+    def _draw_single_pop_subplot(ax, pop_name, side):
 
-        cues        = sorted(cue_to_rate.keys())
-        sides_local = ["L", "R"] if sides is None else sides
+        cues = sorted(cue_to_rate.keys())
+        if side is not None:
+            sides_local = [side]
+        elif sides is not None:
+            sides_local = sides
+        else:
+            sides_local = ["L", "R"]
 
         if isinstance(color, dict):
             side_colors = color
@@ -1692,7 +1701,7 @@ def draw_rate_vs_cue(
     # ---- SINGLE POP ----
     if isinstance(pop, str) and pop != "all":
         fig, ax = plt.subplots(figsize=figsize)
-        _draw_single_pop_subplot(ax, pop)
+        _draw_single_pop_subplot(ax, pop, side)
 
         if title:
             fig.suptitle(title)
@@ -1709,7 +1718,7 @@ def draw_rate_vs_cue(
     axes = np.array(axes).flatten()
 
     for ax, p in zip(axes, pops):
-        _draw_single_pop_subplot(ax, p)
+        _draw_single_pop_subplot(ax, p, side)
 
     for j in range(len(pops), len(axes)):
         axes[j].axis("off")
@@ -1723,9 +1732,9 @@ def draw_rate_vs_cue(
     return axes
 
 def draw_rate_vs_cue_multidata(
-    data_list,
+    data_list,          # list of: single result dict OR list of result dicts
     pop='LSO',
-    rate=True,
+    rate='avg',         # same valid set as draw_rate_vs_cue
     cf_interval=None,
     time_interval=None,
     target_cf_hz=None,
@@ -1745,66 +1754,79 @@ def draw_rate_vs_cue_multidata(
     lw=1.5,
 ):
     """
-    Plot cue vs firing rate for a list of datasets, one curve per dataset,
-    no averaging — each dataset is a separate line.
+    Plot cue vs firing rate comparing groups of datasets.
 
-    data_list : list of result dicts
-        Each element is a single simulation result (same format as draw_rate_vs_cue).
-
+    data_list : list of (single result dict OR list of result dicts)
+        Each entry is one group. If an entry is a list of dicts, the group
+        is averaged (mean ± SEM/STD shading). If a single dict, no shading.
+    pop : str
+        Population name (e.g. 'LSO', 'MSO').
+    rate : str
+        One of {'avg', 'pop', 'spk', 'spk_pn', 'mm_norm', 'max_norm'}.
     side : str
-        Single side to plot: 'L' or 'R'.
-
+        'L' or 'R'.
     colors : list of str, optional
-        One color per dataset. Defaults to a tab10 colormap cycle.
-
+        One color per group. Defaults to tab10 cycle.
     labels : list of str, optional
-        One label per dataset. Defaults to 'dataset 0', 'dataset 1', ...
-
-    All CF selection, time_interval, rate, cue_type, xlim params work
+        One label per group. Defaults to 'group 0', 'group 1', ...
+    error : str
+        'sem' or 'std' — controls error band when group has multiple runs.
+    shaded : bool
+        True → fill_between; False → errorbar caps.
+    All CF selection, time_interval, cue_type, xlim params work
     identically to draw_rate_vs_cue.
     """
+    VALID_RATES = {'avg', 'pop', 'spk', 'spk_pn', 'mm_norm', 'max_norm'}
+    if rate not in VALID_RATES:
+        raise ValueError(f"rate must be one of {VALID_RATES}, got {rate!r}")
 
-    n_datasets = len(data_list)
+    # ------------------------------------------------------------------
+    # Normalize: each entry may be a single dict or a list of dicts
+    # ------------------------------------------------------------------
+    groups = []
+    for entry in data_list:
+        if isinstance(entry, list):
+            groups.append(entry)
+        else:
+            groups.append([entry])
+    n_groups = len(groups)
 
     # ------------------------------------------------------------------
     # Colors and labels
     # ------------------------------------------------------------------
     if colors is None:
         cmap   = plt.get_cmap("tab10")
-        colors = [cmap(i % 10) for i in range(n_datasets)]
-
+        colors = [cmap(i % 10) for i in range(n_groups)]
     if labels is None:
-        labels = [f"dataset {i}" for i in range(n_datasets)]
+        labels = [f"group {i}" for i in range(n_groups)]
 
     # ------------------------------------------------------------------
-    # Resolve CF selection once from the first dataset
+    # Resolve CF selection once from the first dataset of the first group
     # (assumes all datasets share the same population size)
     # ------------------------------------------------------------------
-    _ref_data    = data_list[0]
+    _ref_data    = groups[0][0]
     _cue_to_rate = _ref_data["cue_to_rate"]
     _first_cue   = list(_cue_to_rate.keys())[0]
-    _pop_key     = pop
-    _n_tmp       = len(_cue_to_rate[_first_cue][side][_pop_key]["global_ids"])
+    _n_tmp       = len(_cue_to_rate[_first_cue][side][pop]["global_ids"])
     _cf_tmp      = greenwood_cf_array(CFMIN / Hz, CFMAX / Hz, _n_tmp) / Hz
 
     resolved_cf_interval = cf_interval  # may stay None
 
     if target_cf_hz is not None:
-        _, cf_idx   = take_closest(_cf_tmp, target_cf_hz)
-        half_bin    = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
+        _, cf_idx            = take_closest(_cf_tmp, target_cf_hz)
+        half_bin             = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
         resolved_cf_interval = [_cf_tmp[cf_idx] - half_bin, _cf_tmp[cf_idx] + half_bin]
         print(
             f"[draw_rate_vs_cue_multidata] target_cf_hz={target_cf_hz} Hz → "
             f"neuron idx {cf_idx} → "
             f"cf_interval=[{resolved_cf_interval[0]:.1f}, {resolved_cf_interval[1]:.1f}] Hz"
         )
-
     elif center_cf is not None and bw_neurons is not None:
         _, center_idx = take_closest(_cf_tmp, center_cf)
         low_idx  = max(0, center_idx - bw_neurons)
         high_idx = min(_n_tmp - 1, center_idx + bw_neurons)
         if low_idx == high_idx:
-            half_bin = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
+            half_bin             = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
             resolved_cf_interval = [_cf_tmp[low_idx] - half_bin, _cf_tmp[high_idx] + half_bin]
         else:
             resolved_cf_interval = [_cf_tmp[low_idx], _cf_tmp[high_idx]]
@@ -1814,7 +1836,7 @@ def draw_rate_vs_cue_multidata(
             f"cf_interval=[{resolved_cf_interval[0]:.1f}, {resolved_cf_interval[1]:.1f}] Hz"
         )
 
-    # Resolve neuron count for title
+    # Resolve neuron count for spk_pn and title
     if resolved_cf_interval is not None:
         _, _ymin_idx = take_closest(_cf_tmp, resolved_cf_interval[0])
         _, _ymax_idx = take_closest(_cf_tmp, resolved_cf_interval[1])
@@ -1838,62 +1860,106 @@ def draw_rate_vs_cue_multidata(
     # Figure
     # ------------------------------------------------------------------
     fig, ax = plt.subplots(figsize=figsize)
+    ylabel  = "Firing Rate [Hz]"  # overwritten inside loop
 
-    for i, (d, color, label) in enumerate(zip(data_list, colors, labels)):
+    for group, color, label in zip(groups, colors, labels):
+        all_avg   = []
+        all_pop   = []
+        all_count = []
 
-        cue_to_rate = d["cue_to_rate"]
-        cues        = sorted(cue_to_rate.keys())
+        for d in group:
+            cue_to_rate = d["cue_to_rate"]
+            cues        = sorted(cue_to_rate.keys())
+            default_duration = (
+                d["basesound"].sound.duration / b2.ms
+                if "basesound" in d
+                else d["sounds"]["base_sound"].sound.duration / b2.ms
+            )
+            duration = d.get("simulation_time", default_duration) * b2.ms
 
-        default_duration = (
-            d["basesound"].sound.duration / b2.ms
-            if "basesound" in d
-            else d["sounds"]["base_sound"].sound.duration / b2.ms
-        )
-        duration = d.get("simulation_time", default_duration) * b2.ms
+            if time_interval is not None:
+                effective_duration = (time_interval[1] - time_interval[0]) * b2.ms
+                atr_filtered = {}
+                for cue in cues:
+                    atr_filtered[cue] = {side: {}}
+                    for p in cue_to_rate[cue][side]:
+                        atr_filtered[cue][side][p] = (
+                            _filter_spike_dict(cue_to_rate[cue][side][p], time_interval)
+                            if p == pop else cue_to_rate[cue][side][p]
+                        )
+                atr_to_use = atr_filtered
+                dur_to_use = effective_duration
+            else:
+                atr_to_use = cue_to_rate
+                dur_to_use = duration
 
-        if time_interval is not None:
-            effective_duration = (time_interval[1] - time_interval[0]) * b2.ms
-            atr_filtered = {}
-            for cue in cues:
-                atr_filtered[cue] = {side: {}}
-                for p in cue_to_rate[cue][side]:
-                    atr_filtered[cue][side][p] = (
-                        _filter_spike_dict(cue_to_rate[cue][side][p], time_interval)
-                        if p == pop else cue_to_rate[cue][side][p]
-                    )
-            atr_to_use     = atr_filtered
-            dur_to_use     = effective_duration
+            tot_d, avg_d, cnt_d = calculate_firing_rates(
+                atr_to_use, pop, [side], cues, dur_to_use, resolved_cf_interval,
+            )
+            all_avg.append(avg_d[side])
+            all_pop.append(tot_d[side])
+            all_count.append(cnt_d[side])
+
+        # Aggregate across runs in this group
+        mean_avg   = np.mean(all_avg,   axis=0)
+        mean_pop   = np.mean(all_pop,   axis=0)
+        mean_count = np.mean(all_count, axis=0)
+
+        multi = len(group) > 1
+        if multi:
+            if error == 'sem':
+                _err = lambda x: np.std(x, axis=0) / np.sqrt(len(group))
+            elif error == 'std':
+                _err = lambda x: np.std(x, axis=0)
+            else:
+                raise ValueError("error must be 'sem' or 'std'")
+            err_avg   = _err(all_avg)
+            err_pop   = _err(all_pop)
+            err_count = _err(all_count)
         else:
-            atr_to_use = cue_to_rate
-            dur_to_use = duration
+            err_avg = err_pop = err_count = None
 
-        tot_d, avg_d, _ = calculate_firing_rates(
-            atr_to_use,
-            pop,
-            [side],
-            cues,
-            dur_to_use,
-            resolved_cf_interval,
-        )
+        # --------------------------------------------------------------
+        # Select rate mode — mirrors draw_rate_vs_cue exactly
+        # --------------------------------------------------------------
+        if rate == 'avg':
+            y_vals, y_err = mean_avg,   err_avg
+            ylabel        = "Avg Firing Rate [Hz]"
+        elif rate == 'pop':
+            y_vals, y_err = mean_pop,   err_pop
+            ylabel        = "Population Firing Rate [Hz]"
+        elif rate == 'spk':
+            y_vals, y_err = mean_count, err_count
+            ylabel        = "Spike Count"
+        elif rate == 'spk_pn':
+            y_vals = np.array(mean_count) / n_band
+            y_err  = np.array(err_count)  / n_band if err_count is not None else None
+            ylabel = "Spikes / Neuron"
+        elif rate == 'mm_norm':
+            y_min, y_max = np.array(mean_avg).min(), np.array(mean_avg).max()
+            y_vals = (np.array(mean_avg) - y_min) / (y_max - y_min + 1e-12)
+            y_err  = err_avg
+            ylabel = "Min-Max Normalized Rate"
+        elif rate == 'max_norm':
+            y_vals = np.array(mean_avg) / (np.array(mean_avg).max() + 1e-12)
+            y_err  = err_avg
+            ylabel = "Max Normalized Rate"
 
-        if rate is True:
-            y_vals  = np.array(avg_d[side])
-            ylabel  = "Avg Firing Rate [Hz]"
-        elif rate is False:
-            y_vals  = np.array(tot_d[side])
-            ylabel  = "Population Firing Rate [Hz]"
-        elif rate == "max_norm":
-            y_vals  = np.array(avg_d[side])
-            y_vals  = y_vals / (y_vals.max() + 1e-12)
-            ylabel  = "Max Normalized Rate"
-        elif rate == "mm_norm":
-            y_min, y_max = y_vals.min(), y_vals.max()
-            y_vals  = (np.array(avg_d[side]) - y_min) / (y_max - y_min + 1e-12)
-            ylabel  = "Min-Max Normalized Rate"
-        else:
-            raise ValueError(f"Invalid rate option: {rate}")
-
+        y_vals = np.array(y_vals)
         ax.plot(cues, y_vals, "o-", color=color, label=label, alpha=alpha, lw=lw)
+
+        if multi and y_err is not None:
+            y_err = np.array(y_err)
+            if shaded:
+                ax.fill_between(
+                    cues, y_vals - y_err, y_vals + y_err,
+                    alpha=0.2, color=color, linewidth=0,
+                )
+            else:
+                ax.errorbar(
+                    cues, y_vals, yerr=y_err,
+                    fmt='none', capsize=3, color=color,
+                )
 
     # ------------------------------------------------------------------
     # X-axis
@@ -1904,7 +1970,6 @@ def draw_rate_vs_cue_multidata(
         ax.set_xlabel("Azimuth Angle [deg]")
         if xlim:
             ax.set_xlim(xlim)
-
     elif cue_type == "itd":
         if xlim:
             xlim_s       = [xlim[0] / 1e6, xlim[1] / 1e6]
@@ -1919,7 +1984,6 @@ def draw_rate_vs_cue_multidata(
             [f"{round(c * 1e6)}" for c in visible_cues], rotation=45, ha='right'
         )
         ax.set_xlabel("ITD [µs]")
-
     elif cue_type == "ild":
         visible_cues = cues
         if len(visible_cues) > 11:
@@ -1933,18 +1997,16 @@ def draw_rate_vs_cue_multidata(
     ax.set_ylabel(ylabel)
     if ylim:
         ax.set_ylim(ylim)
-
-    ax.legend(fontsize=8, ncol=max(1, n_datasets // 10))
+    ax.legend(fontsize=8, ncol=max(1, n_groups // 10))
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
     # ------------------------------------------------------------------
-    # Title — same logic as draw_rate_vs_cue
+    # Title
     # ------------------------------------------------------------------
     filter_parts = []
     if time_interval is not None:
         filter_parts.append(f"t=[{time_interval[0]},{time_interval[1]}] ms")
-
     if target_cf_hz is not None:
         filter_parts.append(f"CF={_cf_tmp[cf_idx]:.0f} Hz (1 neuron)")
     elif center_cf is not None and bw_neurons is not None:
@@ -1961,16 +2023,14 @@ def draw_rate_vs_cue_multidata(
     else:
         filter_parts.append(f"CF=full ({n_band} neurons)")
 
-    base_title = f"{pop} — side {side} ({n_datasets} datasets)"
+    base_title = f"{pop} — side {side} ({n_groups} groups)"
     ax.set_title(
         base_title + ("  |  " + ", ".join(filter_parts) if filter_parts else "")
     )
-
     if title:
         fig.suptitle(title, fontsize=13, fontweight='bold')
 
     plt.tight_layout()
-
     return fig, ax
 
 # ─────────────────────────────────────────────────────────────────────────────

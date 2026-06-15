@@ -17,7 +17,7 @@ from cochleas.CICochlea import COCHLEA_KEY as CI_COC_KEY
 from cochleas.CICochlea import sound_to_spikes as ci_cochlea
 
 from utils.cochlea_utils import ANGLES, NUM_ANF_PER_HC, NUM_CF, AnfResponse
-import nest
+
 
 
 SOUND_FREQUENCIES = [100 * Hz, 1 * kHz, 10 * kHz]
@@ -90,6 +90,7 @@ def load_anf_response(sound, condition_val, cochlea_key, params, ignore_cache=Fa
 
 
 def spikes_to_nestgen(anf_response: AnfResponse):
+    import nest
     nest.set_verbosity("M_ERROR")
     anfs_per_ear = {}
     for channel, response_ANF in anf_response.binaural_anf_spiketrain.items():

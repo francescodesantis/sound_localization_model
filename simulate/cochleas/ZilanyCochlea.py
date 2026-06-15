@@ -3,7 +3,8 @@ import sys
 from pathlib import Path
 from typing import Union 
 import dill
-
+import faulthandler
+faulthandler.enable()
 
 model_root = Path(__file__).resolve().parents[2]            # top-level directory (where cochlea-1 lives)
 cochlea_local_path = model_root / "external/cochlea-1/"
