@@ -313,6 +313,15 @@ class Parameters:
         self.TAUS_IN_DECAY = self.TAUS_IN_DECAY()
         self.MEMB_CAPS = self.MEMB_CAPS()
         self.G_LEAK = self.G_LEAK()
+        self.POP_NUM = self.POP_NUM()
+        self.E_L = self.E_L()
+        self.V_RESET = self.V_RESET()
+        self.V_TH = self.V_TH()
+        self.T_REF = self.T_REF()
+        self.EXC_REV = self.EXC_REV()
+        # If INH_REV was also missing from your expected output, add it here too:
+        self.INH_REV = self.INH_REV()
+
 
 """
 iaf_cond_alpha default params

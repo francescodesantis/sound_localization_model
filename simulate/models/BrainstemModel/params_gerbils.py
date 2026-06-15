@@ -86,7 +86,7 @@ class Parameters:
         SBCs2LSOs: int = 40
         MNTBCs2LSOs: int = 8
         SBCs2MSOs: int = 3
-        MNTBCs2MSOs: int = 3#2    
+        MNTBCs2MSOs: int = 3    
         LNTBCs2MSOs: int = 1
         MNTBCs2SPNs: int = 4  
 
@@ -96,7 +96,7 @@ class Parameters:
 
     @dataclass
     class SYN_WEIGHTS:
-        ANFs2SBCs: float = 12#8, 16.0      
+        ANFs2SBCs: float = 12#16.0      
         ANFs2GBCs: float = 5#3#7.0 #high
         #      
         GBCs2LNTBCs: float = 5.0
@@ -106,7 +106,7 @@ class Parameters:
         MNTBCs2LSO: float = -2.3 #tuned for a single spike
         #
         SBCs2MSO: float = 6 #12.0 
-        MNTBCs2MSO: float = -10.0 #-15
+        MNTBCs2MSO: float = -8
         LNTBCs2MSO: float = 0 
         #
         MNTBCs2SPN: float = -40.0 
@@ -313,6 +313,14 @@ class Parameters:
         self.TAUS_IN_DECAY = self.TAUS_IN_DECAY()
         self.MEMB_CAPS = self.MEMB_CAPS()
         self.G_LEAK = self.G_LEAK()
+        self.POP_NUM = self.POP_NUM()
+        self.E_L = self.E_L()
+        self.V_RESET = self.V_RESET()
+        self.V_TH = self.V_TH()
+        self.T_REF = self.T_REF()
+        self.EXC_REV = self.EXC_REV()
+        # If INH_REV was also missing from your expected output, add it here too:
+        self.INH_REV = self.INH_REV()
 
 """
 iaf_cond_alpha default params
