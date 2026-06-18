@@ -13,7 +13,7 @@ from utils.anf_utils import ZI_COC_KEY, CI_COC_KEY, create_sound_key, load_anf_r
 from utils.cochlea_utils import ANGLES
 from utils.path_utils import Paths, save_current_conf
 from models.BrainstemModel.BrainstemModel import BrainstemModel
-from simulate.models.BrainstemModel.params import Parameters as params
+from models.BrainstemModel.params import Parameters as params
 from utils.custom_sounds import Click, Tone, ToneBurst, WhiteNoise, Click_Train, HarmonicComplex
 from utils.log_utils import logger, tqdm
 
@@ -60,16 +60,16 @@ def create_save_result_object(
 
 if __name__ == "__main__":
 
-    TIME_SIMULATION = 60
-    TIME_ON = 50
+    TIME_SIMULATION = 100
+    TIME_ON = 100
     TIME_OFF = TIME_SIMULATION - TIME_ON 
     RAMP_MS = 5     
-    LEVEL = 60
+    LEVEL = 55
 
     inputs = [
         # Tone(16 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
         #Click(duration=TIME_SIMULATION * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB),  
-    Tone(0.25 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
+    Tone(17.6 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
     #Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=4*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=3*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
@@ -79,7 +79,10 @@ if __name__ == "__main__":
     ]
 
     # CONFIGURATION
-    MODE = "angle"  # options: "angle", "artificial_itd", "artificial_ild"
+    MODE = "artificial_ild_exp"  # options: "angle", "artificial_itd", "artificial_ild"
+    we = 5
+    wi = -100
+    experiment_folder = f'we_{we}_wi_{wi}' 
     
     if MODE == "angle":
         loop_range = ANGLES
@@ -93,44 +96,49 @@ if __name__ == "__main__":
         #loop_range = np.linspace(-1000, 1000, 11) * 1e-6   # us to seconds
     elif MODE == "artificial_ild":
         loop_range = np.linspace(-25, 25, 11) # dB
+    elif MODE == "artificial_ild_exp":
+        loop_range = np.linspace(0, 90, 19) # dB
 
-    experiment_folder = MODE 
+
     models = [BrainstemModel]
     cochlea_key = ZI_COC_KEY
 
     ps = []
 
-    for m in ['itd_only', 'HRTF']:
-        seed = 0
-        rng = 42 + seed
-        p = params(f"{m}")
-        p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
-        p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
-        p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
-        p.cochlea[ZI_COC_KEY]['hrtf_params']['cue_to_apply'] = m
-        ps.append(p)
-
-    # for seed in range(10,20):
+    # for m in ['itd_only', 'HRTF']:
+    #     seed = 0
     #     rng = 42 + seed
-    #     p = params(f"seed{seed}")
+    #     p = params(f"{m}")
     #     p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
     #     p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
-    #     p.POP_CONV.MNTBCs2MSOs = 2
-    #     p.SYN_WEIGHTS.MNTBCs2MSO = -15
-    #     p.E_L.MSO = -55
-    #     p.V_RESET.MSO = -57
-    #     p.INH_REV.MSO = -75
-    #     p.TAUS_EX_RISE.MSO = 0.5
-    #     p.TAUS_EX_DECAY.MSO = 1.0
     #     p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
+    #     p.cochlea[ZI_COC_KEY]['hrtf_params']['cue_to_apply'] = m
     #     ps.append(p)
+
+        # p.POP_CONV.MNTBCs2MSOs = 2
+        # p.SYN_WEIGHTS.MNTBCs2MSO = -15
+        # p.E_L.MSO = -55
+        # p.V_RESET.MSO = -57
+        # p.INH_REV.MSO = -75
+        # p.TAUS_EX_RISE.MSO = 0.5
+        # p.TAUS_EX_DECAY.MSO = 1.0
+
+    for seed in range(2):
+        rng = 42 + seed
+        p = params(f"seed{seed}")
+        p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
+        p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
+        p.SYN_WEIGHTS.SBCs2LSO = we
+        p.SYN_WEIGHTS.MNTBCs2LSO = wi
+        p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
+        ps.append(p)
 
 
     num_runs = len(inputs) * len(ps)
     current_run = 0
     logger.info(f"launching {num_runs} trials...\n")
     times = {}
-    result_dir = Path(Paths.RESULTS_DIR) / experiment_folder
+    result_dir = Path(Paths.RESULTS_DIR) / MODE / experiment_folder
     result_dir.mkdir(parents=True, exist_ok=True)
     trials_pbar = tqdm(total=num_runs, desc="trials")
 

@@ -1132,7 +1132,7 @@ def draw_spikes_and_psth_bothside(
     ax_sound0 = fig.add_subplot(gs[0, 0])
     t0 = np.arange(len(R_hrtf_sound)) / R_hrtf_sound.samplerate * 1000
     ax_sound0.plot(t0, R_hrtf_sound, color='g', lw=2)
-    ax_sound0.set_ylabel("HRTF-R")
+    ax_sound0.set_ylabel("R sound")
     ax_sound0.set_xlim(xlim)
     ax_sound0.grid(True, alpha=0.3)
 
@@ -1142,7 +1142,7 @@ def draw_spikes_and_psth_bothside(
     ax_sound2 = fig.add_subplot(gs[2, 0])
     t2 = np.arange(len(L_hrtf_sound)) / L_hrtf_sound.samplerate * 1000
     ax_sound2.plot(t2, L_hrtf_sound, color='m', lw=2)
-    ax_sound2.set_ylabel("HRTF-L")
+    ax_sound2.set_ylabel("L sound")
     ax_sound2.set_xlim(xlim)
     ax_sound2.grid(True, alpha=0.3)
 
@@ -1343,7 +1343,6 @@ def draw_rate_vs_cue(
     target_cf_hz=None,
     center_cf=None,
     bw_neurons=None,
-    sides=None,
     color=None,
     figsize=[7, 4],
     title=None,
@@ -1432,8 +1431,6 @@ def draw_rate_vs_cue(
         cues = sorted(cue_to_rate.keys())
         if side is not None:
             sides_local = [side]
-        elif sides is not None:
-            sides_local = sides
         else:
             sides_local = ["L", "R"]
 
@@ -1641,6 +1638,16 @@ def draw_rate_vs_cue(
             ax.set_xticks(visible_cues)
             ax.set_xticklabels([f"{c}" for c in visible_cues])
             ax.set_xlabel("ILD [dB]")
+            if xlim:
+                ax.set_xlim(xlim)
+
+        elif cue_type == "ild_exp":
+            visible_cues = cues
+            if len(visible_cues) > 11:
+                visible_cues = visible_cues[::2]
+            ax.set_xticks(visible_cues)
+            ax.set_xticklabels([f"{c}" for c in visible_cues])
+            ax.set_xlabel("Contralateral Level [dB]")
             if xlim:
                 ax.set_xlim(xlim)
 
