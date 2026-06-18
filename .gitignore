@@ -14,6 +14,7 @@ secrets
 results
 .DS_Store
 simulate/jobs/*
+simulate/submit_job.sh
 cat > external/cochlea-1/.gitignore << 'EOF'
 # Compiled extensions
 *.so
