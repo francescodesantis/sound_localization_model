@@ -27,11 +27,13 @@ TIME_OFF        = TIME_SIMULATION - TIME_ON
 RAMP_MS         = 5
 LEVEL           = 60
 
-MODE = "angle"   # "angle" | "artificial_itd" | "artificial_ild"
+MODE = "artificial_ild_exp"   # "angle" | "artificial_itd" | "artificial_ild" | "artificial_ild_exp"
 
-SEEDS   = range(0,20)
-DELAYS = [0.78]
+SEEDS = range(0,20)
 
+we = 5
+wi = -100
+test_folder = f"we_{we}_wi_{wi}"
 # =============================================================================
 # Derived loop ranges
 # =============================================================================
@@ -73,17 +75,15 @@ for seed in SEEDS:
 
 ps = []
 for seed in SEEDS:
-    for d in DELAYS:
-        rng = 42 + seed
-        p = params(f"delay_{d}_seed_{seed}")
-        p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
-        p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
-        p.SYN_DELAYS.MNTBCs2LSO = d
-        p.SYN_DELAYS.MNTBCs2MSO = d
-        p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
-        ps.append(p)
+    rng = 42 + seed
+    p = params(f"delay_{d}_seed_{seed}")
+    p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
+    p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
+    p.SYN_WEIGHTS.SBCs2LSO = we
+    p.SYN_WEIGHTS.SBCs2LSO = wi
+    p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
+    ps.append(p)
 
-test_folder = "ild_only"
 # =============================================================================
 # PHASE 1 — Pre-generate / warm ANF cache (cochlea runs here, NEST not loaded)
 # =============================================================================
