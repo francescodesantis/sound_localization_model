@@ -102,8 +102,8 @@ class Parameters:
         GBCs2LNTBCs: float = 5.0
         GBCs2MNTBCs: float = 30.0 #high
         #
-        SBCs2LSO: float = 1 #0.5 #tuned for a single spike   
-        MNTBCs2LSO: float = -2.3 #tuned for a single spike
+        SBCs2LSO: float = 5 #0.5 #tuned for a single spike   
+        MNTBCs2LSO: float = -80 #tuned for a single spike
         #
         SBCs2MSO: float = 6 #12.0 
         MNTBCs2MSO: float = -8
@@ -168,7 +168,7 @@ class Parameters:
         LNTBC: float = -60.0   
         MNTBC: float = -70.0
         LSO: float = -63.0
-        MSO: float = -55.0
+        MSO: float = -51.0
         SPN: float = -65.0
     
     # ------------------------------------------------------------
@@ -181,7 +181,7 @@ class Parameters:
         LNTBC: float = -62.0
         MNTBC: float = -72.0
         LSO: float = -65.0
-        MSO: float = -57.0
+        MSO: float = -53.0
         SPN: float = -67.0
 
     # ------------------------------------------------------------
@@ -233,7 +233,7 @@ class Parameters:
         LNTBC: float = 0.25     
         MNTBC: float = 0.1  
         LSO: float = 0.2    
-        MSO: float = 0.5
+        MSO: float = 0.2
         SPN: float = 0.5        
     # ------------------------------------------------------------ 
     @dataclass
@@ -243,7 +243,7 @@ class Parameters:
         LNTBC: float = 3.8     
         MNTBC: float = 0.17    
         LSO: float = 0.5#1
-        MSO: float = 1.0
+        MSO: float = 0.5
         SPN: float = 1.0
     
     # ------------------------------------------------------------
@@ -256,7 +256,7 @@ class Parameters:
         LNTBC: float = -75.0   
         MNTBC: float = -75.0
         LSO: float = -90
-        MSO: float = -75.0
+        MSO: float = -70.0
         SPN: float = -20.0
 
     # ------------------------------------------------------------

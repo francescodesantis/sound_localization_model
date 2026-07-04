@@ -2,6 +2,8 @@ import datetime
 from datetime import timedelta
 from pathlib import Path
 from timeit import default_timer as timer
+import os
+
 
 import brian2 as b2
 import brian2hears as b2h
@@ -29,11 +31,24 @@ LEVEL           = 60
 
 MODE = "artificial_ild_exp"   # "angle" | "artificial_itd" | "artificial_ild" | "artificial_ild_exp"
 
-SEEDS = range(0,20)
+SEED = int(os.environ.get("SLURM_SEED", 0))   # fallback to 0 for local runs
 
+nucleus = 'LSO'
 we = 5
-wi = -100
+wi = -80
+d = 0.78
 test_folder = f"we_{we}_wi_{wi}"
+
+inputs = [
+    # Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB,
+    #              interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
+    # Tone(0.5 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
+    #      ramp_ms=RAMP_MS, offset_silence_duration=TIME_OFF * b2.ms),
+    Tone(19.9 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
+         ramp_ms=RAMP_MS, offset_silence_duration=TIME_OFF * b2.ms),
+]
+
+
 # =============================================================================
 # Derived loop ranges
 # =============================================================================
@@ -48,13 +63,8 @@ elif MODE == "artificial_itd":
     ]) * 1e-6
 elif MODE == "artificial_ild":
     loop_range = np.linspace(-25, 25, 11)
-
-inputs = [
-    # Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB,
-    #              interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
-    Tone(500 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
-         ramp_ms=RAMP_MS, offset_silence_duration=TIME_OFF * b2.ms),
-]
+elif MODE == "artificial_ild_exp":
+    loop_range = np.linspace(0, 90, 19) # dB
 
 cochlea_key = ZI_COC_KEY
 
@@ -65,24 +75,24 @@ cochlea_key = ZI_COC_KEY
 # =============================================================================
 
 prefetch_ps = []
-for seed in SEEDS:
-    rng = 42 + seed
-    p = params(f"prefetch_seed_{seed}")
-    p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
-    p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
-    p.cochlea[ZI_COC_KEY]['hrtf_params']['cue_to_apply'] = 'ild_only'
-    prefetch_ps.append(p)
+rng = 42 + SEED
+p = params(f"prefetch_seed_{SEED}")
+p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
+p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
+p.cochlea[ZI_COC_KEY]['hrtf_params']['cue_to_apply'] = 'ild_only'
+prefetch_ps.append(p)
 
 ps = []
-for seed in SEEDS:
-    rng = 42 + seed
-    p = params(f"delay_{d}_seed_{seed}")
-    p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
-    p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
-    p.SYN_WEIGHTS.SBCs2LSO = we
-    p.SYN_WEIGHTS.SBCs2LSO = wi
-    p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
-    ps.append(p)
+rng = 42 + SEED
+p = params(f"d_{d}_seed_{SEED}")
+p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
+p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
+p.SYN_WEIGHTS.SBCs2LSO = we
+p.SYN_WEIGHTS.MNTBCs2LSO = wi
+p.SYN_DELAYS.MNTBCs2LSO = d
+
+p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
+ps.append(p)
 
 # =============================================================================
 # PHASE 1 — Pre-generate / warm ANF cache (cochlea runs here, NEST not loaded)
@@ -143,73 +153,71 @@ def create_save_result_object(
 
 if __name__ == "__main__":
 
-    experiment_folder = MODE 
-    models            = [BrainstemModel]
-
+    Model = BrainstemModel
     num_runs    = len(inputs) * len(ps)
     current_run = 0
     logger.info(f"launching {num_runs} trials...\n")
     times      = {}
-    result_dir = Path(Paths.RESULTS_DIR) / experiment_folder / test_folder
+    result_dir = Path(Paths.RESULTS_DIR) / MODE / nucleus / test_folder
     result_dir.mkdir(parents=True, exist_ok=True)
     trials_pbar = tqdm(total=num_runs, desc="trials")
 
-    for Model in models:
-        for input in inputs:
-            for param in ps:
-                L_sounds           = {}
-                R_sounds           = {}
-                gated_sound_global = None
-                result_paths       = []
-                start              = timer()
-                ex_key             = create_execution_key(input, param.key)
-                logger.info(f">>>>> Now testing arch n.{current_run+1} of {num_runs}: {ex_key}\n")
-                cue_to_rate = {}
 
-                for val in loop_range:
-                    nest.ResetKernel()
-                    nest.SetKernelStatus(param.CONFIG.NEST_KERNEL_PARAMS)
+    for input in inputs:
+        for param in ps:
+            L_sounds           = {}
+            R_sounds           = {}
+            gated_sound_global = None
+            result_paths       = []
+            start              = timer()
+            ex_key             = create_execution_key(input, param.key)
+            logger.info(f">>>>> Now testing arch n.{current_run+1} of {num_runs}: {ex_key}\n")
+            cue_to_rate = {}
 
-                    logger.info(f"starting trial for {val}")
-                    # ANF already cached — reads from disk, cochlea not called
-                    anf = load_anf_response(input, val, cochlea_key, param.cochlea)
+            for val in loop_range:
+                nest.ResetKernel()
+                nest.SetKernelStatus(param.CONFIG.NEST_KERNEL_PARAMS)
 
-                    L_sounds[val] = anf.left_sound
-                    R_sounds[val] = anf.right_sound
-                    if gated_sound_global is None:
-                        gated_sound_global = anf.gated_sound
-                    logger.info("ANF loaded. Creating model...")
+                logger.info(f"starting trial for {val}")
+                # ANF already cached — reads from disk, cochlea not called
+                anf = load_anf_response(input, val, cochlea_key, param.cochlea)
 
-                    model = Model(param, anf)
-                    model.simulate(TIME_SIMULATION)
+                L_sounds[val] = anf.left_sound
+                R_sounds[val] = anf.right_sound
+                if gated_sound_global is None:
+                    gated_sound_global = anf.gated_sound
+                logger.info("ANF loaded. Creating model...")
 
-                    model_result = model.analyze()
-                    logger.debug(
-                        f"Left MSO is spiking at "
-                        f"{len(model_result['L']['MSO']['times'])/TIME_SIMULATION*1000}Hz\n"
-                        f"Left LSO is spiking at "
-                        f"{len(model_result['L']['LSO']['times'])/TIME_SIMULATION*1000}Hz"
-                    )
-                    cue_to_rate[val] = model_result
-                    logger.info("Trial Complete.")
+                model = Model(param, anf)
+                model.simulate(TIME_SIMULATION)
 
-                logger.info(f"Saving all values for model {ex_key}...")
-                filename    = f"{ex_key}.pic"
-                result_file = result_dir / filename
-                result_paths.append(result_file)
-
-                end       = timer()
-                timetaken = timedelta(seconds=end - start)
-                current_run += 1
-                times[ex_key] = timetaken
-
-                create_save_result_object(
-                    input, gated_sound_global, L_sounds, R_sounds,
-                    cue_to_rate, MODE, model, param, cochlea_key, result_file,
-                    filename        = filename,
-                    simulation_time = TIME_SIMULATION,
-                    times           = {"start": start, "end": end, "timetaken": timetaken},
+                model_result = model.analyze()
+                logger.debug(
+                    f"Left MSO is spiking at "
+                    f"{len(model_result['L']['MSO']['times'])/TIME_SIMULATION*1000}Hz\n"
+                    f"Left LSO is spiking at "
+                    f"{len(model_result['L']['LSO']['times'])/TIME_SIMULATION*1000}Hz"
                 )
+                cue_to_rate[val] = model_result
+                logger.info("Trial Complete.")
+
+            logger.info(f"Saving all values for model {ex_key}...")
+            filename    = f"{ex_key}.pic"
+            result_file = result_dir / filename
+            result_paths.append(result_file)
+
+            end       = timer()
+            timetaken = timedelta(seconds=end - start)
+            current_run += 1
+            times[ex_key] = timetaken
+
+            create_save_result_object(
+                input, gated_sound_global, L_sounds, R_sounds,
+                cue_to_rate, MODE, model, param, cochlea_key, result_file,
+                filename        = filename,
+                simulation_time = TIME_SIMULATION,
+                times           = {"start": start, "end": end, "timetaken": timetaken},
+            )
 
     trials_pbar.close()
     logger.debug(times)
