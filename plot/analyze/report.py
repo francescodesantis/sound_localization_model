@@ -14,6 +14,7 @@ from matplotlib.gridspec import GridSpec
 from cochleas.consts import CFMAX, CFMIN
 from utils.custom_sounds import Tone, ToneBurst
 import sys, os
+from scipy.optimize import curve_fit
 PROJECT_ROOT = os.path.abspath(os.path.join(os.getcwd(), ".."))
 simulate_repo = PROJECT_ROOT + '/simulate'
 sys.path.insert(0, simulate_repo)
@@ -734,6 +735,9 @@ def plot_tonotopic_heatmaps(
         elif cue_type == "ild":
             ax.set_xticklabels([f"{c}" for c in cues])
             ax.set_xlabel("ILD [dB]")
+        elif cue_type == "ild_exp":
+            ax.set_xticklabels([f"{round(c)}" for c in cues])
+            ax.set_xlabel("Contralateral Level [dB]")
 
         # --- y-axis ---
         if f_ticks is not None and y_axis == 'cf':
@@ -1711,7 +1715,7 @@ def draw_rate_vs_cue(
         _draw_single_pop_subplot(ax, pop, side)
 
         if title:
-            fig.suptitle(title)
+            ax.set_title(title)
 
         plt.tight_layout()
         plt.show()
@@ -2040,8 +2044,334 @@ def draw_rate_vs_cue_multidata(
     plt.tight_layout()
     return fig, ax
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SINGLE NEURON ANALYSIS
+def draw_single_neuron_raster(
+    data_list,
+    pop,
+    side,
+    cue,
+    target_cf_hz=None,
+    center_cf=None,
+    neuron_offset=0,
+    xlim=None,
+    psth_bin_size=1,
+    hist_rate=True,
+    dot_size=2,
+    color=None,
+    labels=None,
+    title=None,
+    figsize=(10, 7),
+):
+    if not data_list:
+        raise ValueError("data_list is empty")
+
+    if color is None:
+        color = 'm' if side == 'L' else 'g'
+
+    n_reps = len(data_list)
+    if labels is None:
+        labels = [f"rep {i}" for i in range(n_reps)]
+
+    # ------------------------------------------------------------------
+    # Resolve target neuron index from the first dataset
+    # ------------------------------------------------------------------
+    _ref       = data_list[0]
+    _ctr       = _ref["cue_to_rate"]
+    _spikes0   = _ctr[cue][side][pop]
+    _gids      = _spikes0["global_ids"]
+    _n         = len(_gids)
+    _cf_arr    = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n) / b2.Hz
+
+    if target_cf_hz is not None:
+        _, neuron_idx = take_closest(_cf_arr, target_cf_hz)
+    elif center_cf is not None:
+        _, center_idx = take_closest(_cf_arr, center_cf)
+        neuron_idx    = int(np.clip(center_idx + neuron_offset, 0, _n - 1))
+    else:
+        raise ValueError("Provide either target_cf_hz or center_cf.")
+
+    neuron_gid = int(_gids[0]) + neuron_idx
+    neuron_cf  = float(_cf_arr[neuron_idx])
+
+    print(
+        f"[draw_single_neuron_raster] pop={pop} side={side} "
+        f"→ neuron idx={neuron_idx}, GID={neuron_gid}, CF={neuron_cf:.1f} Hz"
+    )
+
+    cues = sorted(_ctr.keys())
+
+    if xlim is None:
+        _default_dur = (
+            _ref["basesound"].sound.duration / b2.ms
+            if "basesound" in _ref
+            else _ref["sounds"]["base_sound"].sound.duration / b2.ms
+        )
+        _dur = _ref.get("simulation_time", _default_dur)
+        xlim = [0.0, float(_dur)]
+
+    # ------------------------------------------------------------------
+    # Retrieve sound waveform (from first dataset, first cue)
+    # ------------------------------------------------------------------
+    _sounds    = _ref["sounds"]
+    _side_key  = "left_sounds" if side == "L" else "right_sounds"
+    _hrtf_sound = _sounds[_side_key][cue]
+    _t_sound    = np.arange(len(_hrtf_sound)) / _hrtf_sound.samplerate * 1000  # ms
+
+    # ------------------------------------------------------------------
+    # Layout: sound | raster | psth
+    # ------------------------------------------------------------------
+    fig = plt.figure(figsize=figsize)
+    gs  = GridSpec(
+        3, 1, figure=fig,
+        height_ratios=[0.5, 3, 1],
+        hspace=0.35,
+    )
+    ax_sound  = fig.add_subplot(gs[0])
+    ax_raster = fig.add_subplot(gs[1], sharex=ax_sound)
+    ax_psth   = fig.add_subplot(gs[2], sharex=ax_sound)
+
+    # ------------------------------------------------------------------
+    # Sound panel
+    # ------------------------------------------------------------------
+    ax_sound.plot(_t_sound, _hrtf_sound, color=color, lw=0.8)
+    ax_sound.set_xlim(xlim)
+    ax_sound.set_ylabel(f"{'L' if side == 'L' else 'R'} sound")
+    ax_sound.set_yticks([])
+    ax_sound.spines["top"].set_visible(False)
+    ax_sound.spines["right"].set_visible(False)
+    ax_sound.spines["left"].set_visible(False)
+    ax_sound.tick_params(labelbottom=False)
+
+    # ------------------------------------------------------------------
+    # Raster
+    # ------------------------------------------------------------------
+    all_spike_times = []
+
+    for rep_idx, d in enumerate(data_list):
+        spikes  = d["cue_to_rate"][cue][side][pop]
+        times   = spikes["times"]
+        senders = spikes["senders"]
+        mask    = (
+            (senders == neuron_gid) &
+            (times   >= xlim[0])   &
+            (times   <= xlim[1])
+        )
+        rep_times = times[mask]
+        all_spike_times.append(rep_times)
+
+        y_vals = np.full(len(rep_times), rep_idx)
+        ax_raster.plot(
+            rep_times, y_vals, '|',
+            color=color,
+            markersize=dot_size * 4,
+            markeredgewidth=dot_size * 0.6,
+        )
+
+    ax_raster.set_ylim(-0.5, n_reps - 0.5)
+    ax_raster.invert_yaxis()
+    ax_raster.set_yticks(range(n_reps))
+    ax_raster.set_yticklabels(labels, fontsize=8)
+    ax_raster.set_ylabel("Repetition")
+    ax_raster.set_title(
+        f"{pop} | side {side} | cue = {cue} | CF = {neuron_cf:.0f} Hz "
+        f"(GID {neuron_gid}, idx {neuron_idx})"
+    )
+    ax_raster.spines["top"].set_visible(False)
+    ax_raster.spines["right"].set_visible(False)
+    ax_raster.tick_params(labelbottom=False)
+
+    # ------------------------------------------------------------------
+    # PSTH
+    # ------------------------------------------------------------------
+    bins = np.arange(xlim[0], xlim[1] + psth_bin_size, psth_bin_size)
+    all_times_pooled = np.concatenate(all_spike_times) if all_spike_times else np.array([])
+    counts, _ = np.histogram(all_times_pooled, bins=bins)
+
+    if hist_rate:
+        rates = counts * (1000.0 / psth_bin_size) / n_reps
+        ax_psth.bar(bins[:-1], rates, width=psth_bin_size * 0.9,
+                    color=color, alpha=0.55, align='edge')
+        ax_psth.axhline(rates.mean(), color=color, lw=1.5, ls='--', alpha=0.85)
+        ax_psth.set_ylabel("Rate [Hz]")
+    else:
+        ax_psth.bar(bins[:-1], counts, width=psth_bin_size * 0.9,
+                    color=color, alpha=0.55, align='edge')
+        ax_psth.set_ylabel("Spike count")
+
+    ax_psth.set_xlabel("Time [ms]")
+    ax_psth.spines["top"].set_visible(False)
+    ax_psth.spines["right"].set_visible(False)
+
+    if title:
+        fig.suptitle(title, fontsize=13, fontweight='bold')
+
+    plt.tight_layout()
+    return fig, (ax_sound, ax_raster, ax_psth)# ─────────────────────────────────────────────────────────────────────────────
+
+def draw_single_neuron_raster_by_cue(
+    data,
+    pop,
+    side,
+    target_cf_hz=None,
+    center_cf=None,
+    neuron_offset=0,
+    xlim=None,
+    psth_bin_size=1,
+    hist_rate=True,
+    dot_size=2,
+    color=None,
+    cmap_name='viridis',
+    cues_to_plot=None,
+    title=None,
+    figsize=(10, 7),
+):
+    """
+    Raster plot for a SINGLE result (one seed/recording): each row on the
+    y-axis is a different cue (e.g. azimuth/ITD/ILD), for one selected
+    neuron — as opposed to draw_single_neuron_raster, where rows are
+    repetitions of the same cue.
+
+    The sound panel shows one waveform per cue (since, unlike the
+    repetitions case, the stimulus differs across rows), colored to match
+    the cue ordering on the raster below.
+    """
+    if color is None:
+        color = 'm' if side == 'L' else 'g'
+
+    _ctr = data["cue_to_rate"]
+    all_cues = sorted(_ctr.keys())
+    cues = cues_to_plot if cues_to_plot is not None else all_cues
+    n_cues = len(cues)
+
+    # ---- Resolve target neuron (same logic, using first cue as reference) ----
+    _ref_cue = cues[0]
+    _spikes0 = _ctr[_ref_cue][side][pop]
+    _gids    = _spikes0["global_ids"]
+    _n       = len(_gids)
+    _cf_arr  = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n) / b2.Hz
+
+    if target_cf_hz is not None:
+        _, neuron_idx = take_closest(_cf_arr, target_cf_hz)
+    elif center_cf is not None:
+        _, center_idx = take_closest(_cf_arr, center_cf)
+        neuron_idx = int(np.clip(center_idx + neuron_offset, 0, _n - 1))
+    else:
+        raise ValueError("Provide either target_cf_hz or center_cf.")
+
+    neuron_gid = int(_gids[0]) + neuron_idx
+    neuron_cf  = float(_cf_arr[neuron_idx])
+
+    print(
+        f"[draw_single_neuron_raster_by_cue] pop={pop} side={side} "
+        f"→ neuron idx={neuron_idx}, GID={neuron_gid}, CF={neuron_cf:.1f} Hz"
+    )
+
+    if xlim is None:
+        _default_dur = (
+            data["basesound"].sound.duration / b2.ms
+            if "basesound" in data
+            else data["sounds"]["base_sound"].sound.duration / b2.ms
+        )
+        _dur = data.get("simulation_time", _default_dur)
+        xlim = [0.0, float(_dur)]
+
+    # colormap across cues, shared between sound panel and raster row labels
+
+    # ------------------------------------------------------------------
+    # Layout: sound | raster | psth
+    # ------------------------------------------------------------------
+    fig = plt.figure(figsize=figsize)
+    gs  = GridSpec(
+        3, 1, figure=fig,
+        height_ratios=[0.5, 3, 1],
+        hspace=0.35,
+    )
+    ax_sound  = fig.add_subplot(gs[0])
+    ax_raster = fig.add_subplot(gs[1], sharex=ax_sound)
+    ax_psth   = fig.add_subplot(gs[2], sharex=ax_sound)
+
+    # ------------------------------------------------------------------
+    # Sound panel — one waveform per cue
+    # ------------------------------------------------------------------
+    _sounds     = data["sounds"]
+    _side_key   = "left_sounds" if side == "L" else "right_sounds"
+    _hrtf_sound = _sounds[_side_key][0]
+    _t_sound    = np.arange(len(_hrtf_sound)) / _hrtf_sound.samplerate * 1000  # ms
+
+    ax_sound.plot(_t_sound, _hrtf_sound, color=color, lw=0.8)
+    ax_sound.set_xlim(xlim)
+    ax_sound.set_ylabel(f"{'L' if side == 'L' else 'R'} sound (cue=0)")
+    ax_sound.set_yticks([])
+    ax_sound.spines["top"].set_visible(False)
+    ax_sound.spines["right"].set_visible(False)
+    ax_sound.spines["left"].set_visible(False)
+    ax_sound.tick_params(labelbottom=False)
+    # ------------------------------------------------------------------
+    # Raster
+    # ------------------------------------------------------------------
+    all_spike_times = []
+
+    for row_idx, cue in enumerate(cues):
+        spikes  = _ctr[cue][side][pop]
+        times   = spikes["times"]
+        senders = spikes["senders"]
+        mask = (
+            (senders == neuron_gid) &
+            (times   >= xlim[0]) &
+            (times   <= xlim[1])
+        )
+        cue_times = times[mask]
+        all_spike_times.append(cue_times)
+
+        y_vals = np.full(len(cue_times), row_idx)
+        ax_raster.plot(
+            cue_times, y_vals, '|',
+            color=color,
+            markersize=dot_size * 4,
+            markeredgewidth=dot_size * 0.6,
+        )
+
+    ax_raster.set_ylim(-0.5, n_cues - 0.5)
+    ax_raster.invert_yaxis()
+    ax_raster.set_yticks(range(round(n_cues,2)))
+    ax_raster.set_yticklabels([f"{c:.6f}" for c in cues], fontsize=8)
+
+
+    ax_raster.set_ylabel("Cue")
+    ax_raster.set_title(
+        f"{pop} | side {side} | CF = {neuron_cf:.0f} Hz "
+        f"(GID {neuron_gid}, idx {neuron_idx})"
+    )
+    ax_raster.spines["top"].set_visible(False)
+    ax_raster.spines["right"].set_visible(False)
+    ax_raster.tick_params(labelbottom=False)
+
+    # ---- PSTH pooled across all plotted cues ----
+    bins = np.arange(xlim[0], xlim[1] + psth_bin_size, psth_bin_size)
+    all_times_pooled = np.concatenate(all_spike_times) if all_spike_times else np.array([])
+    counts, _ = np.histogram(all_times_pooled, bins=bins)
+
+    if hist_rate:
+        rates = counts * (1000.0 / psth_bin_size) / n_cues
+        ax_psth.bar(bins[:-1], rates, width=psth_bin_size * 0.9,
+                    color=color, alpha=0.55, align='edge')
+        ax_psth.axhline(rates.mean(), color=color, lw=1.5, ls='--', alpha=0.85)
+        ax_psth.set_ylabel("Rate [Hz]")
+    else:
+        ax_psth.bar(bins[:-1], counts, width=psth_bin_size * 0.9,
+                    color=color, alpha=0.55, align='edge')
+        ax_psth.set_ylabel("Spike count")
+
+    ax_psth.set_xlabel("Time [ms]")
+    ax_psth.spines["top"].set_visible(False)
+    ax_psth.spines["right"].set_visible(False)
+
+    if title:
+        fig.suptitle(title, fontsize=13, fontweight='bold')
+
+    plt.tight_layout()
+    return fig, (ax_sound, ax_raster, ax_psth)# ─────────────────────────────────────────────────────────────────────────────
+
+# METRIC COMPUTATION
 # ─────────────────────────────────────────────────────────────────────────────
 
 def plot_single_neuron_psth(
@@ -2678,10 +3008,264 @@ def report_firing_rates_and_vs(
     print(f"{'='*60}\n")
     return fr_results
 
+def get_avg_rate_vs_cue(
+    data,
+    pop='LSO',
+    side='L',
+    cf_interval=None,
+    time_interval=None,
+    target_cf_hz=None,
+    center_cf=None,
+    bw_neurons=None,
+):
+    """
+    Extract the raw (cues, avg_firing_rate) curve for one population/side,
+    reusing the exact CF-resolution and rate-calculation logic used in
+    draw_rate_vs_cue. Intended to feed extract_ild50_metrics.
+    """
+    if isinstance(data, list):
+        multi_data = data
+        data = data[0]
+    else:
+        multi_data = [data]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# METRIC COMPUTATION
-# ─────────────────────────────────────────────────────────────────────────────
+    cue_to_rate = data["cue_to_rate"]
+    default_duration = (
+        data["basesound"].sound.duration / b2.ms
+        if "basesound" in data
+        else data["sounds"]["base_sound"].sound.duration / b2.ms
+    )
+    duration = data.get("simulation_time", default_duration) * b2.ms
+
+    # --- CF interval resolution (identical to draw_rate_vs_cue) ---
+    if target_cf_hz is not None:
+        _first_cue = list(cue_to_rate.keys())[0]
+        _n_tmp = len(cue_to_rate[_first_cue]["L"][pop]["global_ids"])
+        _cf_tmp = greenwood_cf_array(CFMIN / Hz, CFMAX / Hz, _n_tmp) / Hz
+        _, cf_idx = take_closest(_cf_tmp, target_cf_hz)
+        half_bin = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
+        cf_interval = [_cf_tmp[cf_idx] - half_bin, _cf_tmp[cf_idx] + half_bin]
+
+    elif center_cf is not None and bw_neurons is not None:
+        _first_cue = list(cue_to_rate.keys())[0]
+        _n_tmp = len(cue_to_rate[_first_cue]["L"][pop]["global_ids"])
+        _cf_tmp = greenwood_cf_array(CFMIN / Hz, CFMAX / Hz, _n_tmp) / Hz
+        _, center_idx = take_closest(_cf_tmp, center_cf)
+        low_idx = max(0, center_idx - bw_neurons)
+        high_idx = min(_n_tmp - 1, center_idx + bw_neurons)
+        if low_idx == high_idx:
+            half_bin = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
+            cf_interval = [_cf_tmp[low_idx] - half_bin, _cf_tmp[high_idx] + half_bin]
+        else:
+            cf_interval = [_cf_tmp[low_idx], _cf_tmp[high_idx]]
+
+    def _filter_spike_dict(spike_dict, time_interval):
+        times, gids = spike_dict["times"], spike_dict["global_ids"]
+        senders = spike_dict["senders"]
+        if time_interval is None:
+            return spike_dict
+        mask = (times >= time_interval[0]) & (times <= time_interval[1])
+        return {"times": times[mask], "senders": senders[mask], "global_ids": gids}
+
+    effective_duration = (
+        (time_interval[1] - time_interval[0]) * b2.ms
+        if time_interval is not None else duration
+    )
+
+    cues = sorted(cue_to_rate.keys())
+    all_avg = []
+
+    for d in multi_data:
+        angle_to_rate_d = d["cue_to_rate"]
+        if time_interval is not None:
+            atr = {}
+            for cue in cues:
+                atr[cue] = {side: {}}
+                for p, sd in angle_to_rate_d[cue][side].items():
+                    atr[cue][side][p] = (
+                        _filter_spike_dict(sd, time_interval) if p == pop else sd
+                    )
+            dur_d = effective_duration
+        else:
+            atr = angle_to_rate_d
+            dur_d = d.get(
+                "simulation_time",
+                data["sounds"]["base_sound"].sound.duration / b2.ms,
+            ) * b2.ms
+
+        _, avg_d, _ = calculate_firing_rates(atr, pop, [side], cues, dur_d, cf_interval)
+        all_avg.append(avg_d[side])
+
+    mean_avg = np.mean(all_avg, axis=0)
+    sem_avg = (
+        np.std(all_avg, axis=0) / np.sqrt(len(multi_data))
+        if len(multi_data) > 1 else None
+    )
+
+    return {
+        "cues": np.array(cues, dtype=float),
+        "rate": np.array(mean_avg, dtype=float),
+        "sem": sem_avg,
+        "cf_interval": cf_interval,
+    }
+
+def four_param_sigmoid(x, bottom, top, ild50, slope):
+    """4-parameter logistic. slope>0 -> decreasing curve, slope<0 -> increasing."""
+    return bottom + (top - bottom) / (1.0 + np.exp((x - ild50) / slope))
+
+def extract_ild50_metrics(
+    cues,
+    rate,
+    ipsi_ref='min',
+    normalize=True,
+    p0=None,
+    maxfev=20000,
+):
+    """
+    Fit a 4-parameter sigmoid to an avg-rate vs contralateral-level ('ild_exp')
+    curve and extract max rate, min rate, and ILD50 (half-maximal contralateral
+    level), following the normalize-to-monaural-ipsi -> sigmoid-fit approach.
+
+    Parameters
+    ----------
+    cues : array-like
+        Contralateral levels (dB) — x-axis of the ild_exp curve.
+    rate : array-like
+        Avg firing rate (Hz), same order as cues.
+    ipsi_ref : 'min' | 'max' | float
+        Which cue represents monaural ipsilateral stimulation (weakest/no
+        contralateral drive), used as the 100% reference. Pick 'min' if the
+        smallest contra level in your sweep is effectively "off", 'max' if
+        it's the other end, or pass an explicit cue value.
+    normalize : bool
+        If True, rescale so rate at ipsi_ref == 100 before fitting (this
+        matches the IID50 definition). If False, fits raw Hz.
+    p0 : tuple, optional
+        Initial guess (bottom, top, ild50, slope).
+
+    Returns
+    -------
+    dict: max_rate, min_rate, ild50, slope, fit_params, fit_curve_fn,
+          r_squared, cues, rate (post-normalization)
+    """
+    cues = np.asarray(cues, dtype=float)
+    rate = np.asarray(rate, dtype=float)
+    order = np.argsort(cues)
+    cues, rate = cues[order], rate[order]
+
+    if normalize:
+        if ipsi_ref == 'min':
+            ref_val = rate[0]
+        elif ipsi_ref == 'max':
+            ref_val = rate[-1]
+        else:
+            _, idx = take_closest(cues, ipsi_ref)
+            ref_val = rate[idx]
+        if ref_val == 0:
+            raise ValueError("Reference (monaural ipsi) rate is 0 — cannot normalize.")
+        y = 100.0 * rate / ref_val
+    else:
+        y = rate
+
+    # auto-detect direction (LSO-type curves fall as contra level rises)
+    corr = np.corrcoef(cues, y)[0, 1]
+    sign = 1.0 if corr < 0 else -1.0
+
+    if p0 is None:
+        bottom0 = float(np.min(y))
+        top0 = float(np.max(y))
+        ild500 = cues[np.argmin(np.abs(y - (top0 + bottom0) / 2))]
+        slope0 = sign * (cues[-1] - cues[0]) / 10.0
+        p0 = (bottom0, top0, ild500, slope0)
+
+    popt, pcov = curve_fit(four_param_sigmoid, cues, y, p0=p0, maxfev=maxfev)
+    bottom, top, ild50, slope = popt
+
+    y_fit = four_param_sigmoid(cues, *popt)
+    ss_res = np.sum((y - y_fit) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+    return {
+        "max_rate": float(np.max(y)),
+        "min_rate": float(np.min(y)),
+        "ild50": float(ild50),
+        "slope": float(slope),
+        "fit_params": {"bottom": bottom, "top": top, "ild50": ild50, "slope": slope},
+        "fit_curve_fn": lambda x, p=popt: four_param_sigmoid(np.asarray(x, dtype=float), *p),
+        "r_squared": float(r_squared),
+        "normalized": normalize,
+        "cues": cues,
+        "rate": y,
+    }
+
+def plot_ild50_fit(
+    metrics,
+    ax=None,
+    figsize=(6, 4.5),
+    data_color='k',
+    fit_color='C3',
+    show_sem=True,
+    sem=None,
+    title=None,
+    xlabel="Contralateral Level [dB]",
+    ylabel=None,
+    n_fit_points=200,
+):
+    """
+    Plot the averaged data points (from extract_ild50_metrics) together with
+    the fitted sigmoid, marking max, min, and ILD50.
+
+    Parameters
+    ----------
+    metrics : dict
+        Output of extract_ild50_metrics.
+    ax : matplotlib Axes, optional
+        Existing axes to draw on. Creates new figure if None.
+    show_sem : bool
+        If True and `sem` is provided, draws error bars on the data points.
+    sem : array-like, optional
+        Standard error per cue (e.g. curve["sem"] from get_avg_rate_vs_cue).
+        Only meaningful if metrics was NOT normalized (normalize=False),
+        since sem here is in raw Hz, not on the normalized scale.
+    """
+    cues = metrics["cues"]
+    y = metrics["rate"]
+    fit_fn = metrics["fit_curve_fn"]
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+
+    # raw / normalized data points
+    if show_sem and sem is not None and not metrics["normalized"]:
+        ax.errorbar(
+            cues, y, yerr=sem, fmt='o', color=data_color,
+            capsize=3, label='data (mean ± SEM)', zorder=3,
+        )
+    else:
+        ax.plot(cues, y, 'o', color=data_color, label='data', zorder=3)
+
+    # smooth fitted sigmoid
+    x_fit = np.linspace(cues.min(), cues.max(), n_fit_points)
+    y_fit = fit_fn(x_fit)
+    ax.plot(x_fit, y_fit, '-', color=fit_color, lw=2, label='sigmoid fit', zorder=2)
+
+    # mark max, min, ILD50
+    ax.axhline(metrics["max_rate"], color=fit_color, ls=':', lw=1, alpha=0.6)
+    ax.axhline(metrics["min_rate"], color=fit_color, ls=':', lw=1, alpha=0.6)
+
+    ild50 = metrics["ild50"]
+    y_at_ild50 = fit_fn(np.array([ild50]))[0]
+    ax.axvline(ild50, color=fit_color, ls='--', lw=1, alpha=0.7)
+    ax.plot(ild50, y_at_ild50, 'D', color=fit_color, ms=7, zorder=4,
+            label=f'ILD50 = {ild50:.1f} dB')
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel or ("Normalized Rate [% ipsi]" if metrics["normalized"] else "Avg Firing Rate [Hz]"))
+    ax.set_title(title or f"R² = {metrics['r_squared']:.3f}")
+    ax.legend(loc='best', fontsize=8)
+
+    return ax
 
 def compute_metrics_for_angle(res, cue, pop,
                                xlim_peak=(0, 20), bin_size=0.5,
@@ -2793,6 +3377,115 @@ def compute_lateralization_metrics(res, pop, cues,
     for k in keys:
         results[k] = np.array([r[k] for r in rows])
     return results
+
+def extract_first_spike_latency_metrics(
+    data_list,
+    pop,
+    side,
+    cue,
+    target_cf_hz=None,
+    center_cf=None,
+    neuron_offset=0,
+    onset_time=0.0,
+    window=None,
+):
+    """
+    First-spike latency and jitter for a single neuron across repetitions:
+    "Median latency and jitter, defined as the 25-75% quartile range, were
+    computed for the first spikes after stimulus onset, averaged over n
+    repetitions."
+
+    Parameters
+    ----------
+    data_list : list of result dicts, one per repetition
+        (same structure/order as draw_single_neuron_raster's data_list)
+    pop, side, cue : population, hemisphere, cue value to select.
+    target_cf_hz / center_cf : neuron selection, same semantics as
+        draw_single_neuron_raster.
+    onset_time : float
+        Stimulus onset (ms); latency is measured relative to this.
+    window : [start, end] ms, optional
+        Absolute time window to search for the first spike. Defaults to
+        [onset_time, trial end] inferred from the first dataset.
+
+    Returns
+    -------
+    dict: median_latency, jitter_iqr, q25, q75, latencies (per responding
+    rep), n_reps, n_responses, response_rate, neuron_gid, neuron_cf.
+    """
+    if not data_list:
+        raise ValueError("data_list is empty")
+
+    n_reps = len(data_list)
+
+    # ---- Resolve target neuron (identical logic to draw_single_neuron_raster) ----
+    _ref     = data_list[0]
+    _ctr     = _ref["cue_to_rate"]
+    _spikes0 = _ctr[cue][side][pop]
+    _gids    = _spikes0["global_ids"]
+    _n       = len(_gids)
+    _cf_arr  = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n) / b2.Hz
+
+    if target_cf_hz is not None:
+        _, neuron_idx = take_closest(_cf_arr, target_cf_hz)
+    elif center_cf is not None:
+        _, center_idx = take_closest(_cf_arr, center_cf)
+        neuron_idx = int(np.clip(center_idx + neuron_offset, 0, _n - 1))
+    else:
+        raise ValueError("Provide either target_cf_hz or center_cf.")
+
+    neuron_gid = int(_gids[0]) + neuron_idx
+    neuron_cf  = float(_cf_arr[neuron_idx])
+
+    if window is None:
+        _default_dur = (
+            _ref["basesound"].sound.duration / b2.ms
+            if "basesound" in _ref
+            else _ref["sounds"]["base_sound"].sound.duration / b2.ms
+        )
+        _dur = _ref.get("simulation_time", _default_dur)
+        window = [onset_time, float(_dur)]
+
+    # ---- First-spike latency per repetition ----
+    latencies = []
+    for d in data_list:
+        spikes  = d["cue_to_rate"][cue][side][pop]
+        times   = spikes["times"]
+        senders = spikes["senders"]
+        mask = (
+            (senders == neuron_gid) &
+            (times   >= window[0]) &
+            (times   <= window[1])
+        )
+        rep_times = np.sort(times[mask])
+        if rep_times.size > 0:
+            latencies.append(rep_times[0] - onset_time)
+        # non-responding reps are excluded, not zero-padded
+
+    latencies = np.array(latencies, dtype=float)
+    n_responses = latencies.size
+
+    if n_responses == 0:
+        return {
+            "median_latency": np.nan, "jitter_iqr": np.nan,
+            "q25": np.nan, "q75": np.nan, "latencies": latencies,
+            "n_reps": n_reps, "n_responses": 0, "response_rate": 0.0,
+            "neuron_gid": neuron_gid, "neuron_cf": neuron_cf,
+        }
+
+    q25 = float(np.percentile(latencies, 25))
+    q75 = float(np.percentile(latencies, 75))
+
+    return {
+        "median_latency": float(np.median(latencies)),
+        "jitter_iqr": q75 - q25,
+        "q25": q25, "q75": q75,
+        "latencies": latencies,
+        "n_reps": n_reps, "n_responses": n_responses,
+        "response_rate": n_responses / n_reps,
+        "neuron_gid": neuron_gid, "neuron_cf": neuron_cf,
+    }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PLOTTING
