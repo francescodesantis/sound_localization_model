@@ -60,17 +60,17 @@ def create_save_result_object(
 
 if __name__ == "__main__":
 
-    TIME_SIMULATION = 100
-    TIME_ON = 100
+    TIME_SIMULATION = 60
+    TIME_ON = 50
     TIME_OFF = TIME_SIMULATION - TIME_ON 
     RAMP_MS = 5     
-    LEVEL = 55
+    LEVEL = 60
 
     inputs = [
-        # Tone(16 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
+        Tone(16 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
         #Click(duration=TIME_SIMULATION * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB),  
-    Tone(17.6 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
-    #Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
+        # Tone(0.25 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
+        #Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=4*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=3*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=2*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
@@ -81,7 +81,8 @@ if __name__ == "__main__":
     # CONFIGURATION
     MODE = "artificial_ild_exp"  # options: "angle", "artificial_itd", "artificial_ild"
     we = 5
-    wi = -100
+    wi = -80
+    d = 0.78
     experiment_folder = f'we_{we}_wi_{wi}' 
     
     if MODE == "angle":
@@ -123,13 +124,14 @@ if __name__ == "__main__":
         # p.TAUS_EX_RISE.MSO = 0.5
         # p.TAUS_EX_DECAY.MSO = 1.0
 
-    for seed in range(2):
+    for seed in range(5):
         rng = 42 + seed
-        p = params(f"seed{seed}")
+        p = params(f"d{d}_seed{seed}")
         p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
         p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
         p.SYN_WEIGHTS.SBCs2LSO = we
         p.SYN_WEIGHTS.MNTBCs2LSO = wi
+        p.SYN_DELAYS.MNTBCs2LSO = d
         p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
         ps.append(p)
 
