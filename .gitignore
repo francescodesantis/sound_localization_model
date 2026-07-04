@@ -15,6 +15,7 @@ results
 .DS_Store
 simulate/jobs/*
 simulate/submit_job.sh
+simulate/job_array.sh
 cat > external/cochlea-1/.gitignore << 'EOF'
 # Compiled extensions
 *.so
