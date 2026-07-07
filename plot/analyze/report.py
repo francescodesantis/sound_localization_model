@@ -2051,7 +2051,7 @@ def draw_single_neuron_raster(
     cue,
     target_cf_hz=None,
     center_cf=None,
-    neuron_offset=0,
+    bw_neurons=0,
     xlim=None,
     psth_bin_size=1,
     hist_rate=True,
@@ -2085,7 +2085,7 @@ def draw_single_neuron_raster(
         _, neuron_idx = take_closest(_cf_arr, target_cf_hz)
     elif center_cf is not None:
         _, center_idx = take_closest(_cf_arr, center_cf)
-        neuron_idx    = int(np.clip(center_idx + neuron_offset, 0, _n - 1))
+        neuron_idx    = int(np.clip(center_idx + bw_neurons, 0, _n - 1))
     else:
         raise ValueError("Provide either target_cf_hz or center_cf.")
 
@@ -2213,7 +2213,7 @@ def draw_single_neuron_raster_by_cue(
     side,
     target_cf_hz=None,
     center_cf=None,
-    neuron_offset=0,
+    bw_neurons=0,
     xlim=None,
     psth_bin_size=1,
     hist_rate=True,
@@ -2253,7 +2253,7 @@ def draw_single_neuron_raster_by_cue(
         _, neuron_idx = take_closest(_cf_arr, target_cf_hz)
     elif center_cf is not None:
         _, center_idx = take_closest(_cf_arr, center_cf)
-        neuron_idx = int(np.clip(center_idx + neuron_offset, 0, _n - 1))
+        neuron_idx = int(np.clip(center_idx + bw_neurons, 0, _n - 1))
     else:
         raise ValueError("Provide either target_cf_hz or center_cf.")
 
@@ -3385,7 +3385,7 @@ def extract_first_spike_latency_metrics(
     cue,
     target_cf_hz=None,
     center_cf=None,
-    neuron_offset=0,
+    bw_neurons=0,
     onset_time=0.0,
     window=None,
 ):
@@ -3430,7 +3430,7 @@ def extract_first_spike_latency_metrics(
         _, neuron_idx = take_closest(_cf_arr, target_cf_hz)
     elif center_cf is not None:
         _, center_idx = take_closest(_cf_arr, center_cf)
-        neuron_idx = int(np.clip(center_idx + neuron_offset, 0, _n - 1))
+        neuron_idx = int(np.clip(center_idx + bw_neurons, 0, _n - 1))
     else:
         raise ValueError("Provide either target_cf_hz or center_cf.")
 
