@@ -29,7 +29,7 @@ TIME_OFF        = TIME_SIMULATION - TIME_ON
 RAMP_MS         = 5
 LEVEL           = 60
 
-MODE = "artificial_ild_exp"   # "angle" | "artificial_itd" | "artificial_ild" | "artificial_ild_exp"
+MODE = "artificial_ild"   # "angle" | "artificial_itd" | "artificial_ild" | "artificial_ild_exp"
 
 SEED = int(os.environ.get("SLURM_SEED", 0))   # fallback to 0 for local runs
 
@@ -44,7 +44,7 @@ inputs = [
     #              interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     # Tone(0.5 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
     #      ramp_ms=RAMP_MS, offset_silence_duration=TIME_OFF * b2.ms),
-    Tone(19.9 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
+    Tone(19 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
          ramp_ms=RAMP_MS, offset_silence_duration=TIME_OFF * b2.ms),
 ]
 
