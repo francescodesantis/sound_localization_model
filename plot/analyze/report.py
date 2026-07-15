@@ -26,8 +26,8 @@ plt.rcParams['axes.titleweight']= 'bold'
 plt.rcParams['axes.spines.top']= False
 plt.rcParams['axes.spines.right']= False
 plt.rcParams['axes.labelsize'] = 10
-plt.rcParams['xtick.labelsize'] = 12   # Size of x-axis tick labels
-plt.rcParams['ytick.labelsize'] = 12   # Size of y-axis tick labels
+plt.rcParams['xtick.labelsize'] = 10   # Size of x-axis tick labels
+plt.rcParams['ytick.labelsize'] = 10   # Size of y-axis tick labels
 plt.rcParams['legend.fontsize'] = 10   # Size of the legend text
 # Make axis labels bold
 plt.rcParams['axes.labelweight'] = 'bold'  # Makes x and y axis labels bold
@@ -1613,7 +1613,6 @@ def draw_rate_vs_cue(
                 ax.set_xlim(xlim)
 
         elif cue_type == "itd":
-            # Apply xlim first so we know the visible range
             if xlim:
                 xlim_s = [xlim[0]/1e6, xlim[1]/1e6]
                 ax.set_xlim(xlim_s)
@@ -1621,11 +1620,16 @@ def draw_rate_vs_cue(
             else:
                 visible_cues = cues
 
-            # Subsample ticks if too many (target max_ticks)
             max_ticks = 11
             if len(visible_cues) > max_ticks:
-                step = 2
-                visible_cues = visible_cues[::step]
+                step = max(1, len(visible_cues) // max_ticks)
+                subsampled = visible_cues[::step]
+                # Ensure 0 is always included
+                if 0.0 not in subsampled:
+                    zero_idx = np.argmin(np.abs(np.array(visible_cues)))
+                    zero_val = visible_cues[zero_idx]
+                    subsampled = sorted(set(subsampled) | {zero_val})
+                visible_cues = subsampled
 
             ax.set_xticks(visible_cues)
             ax.set_xticklabels(
@@ -1748,7 +1752,7 @@ def draw_rate_vs_cue_multidata(
     rate='avg',         # same valid set as draw_rate_vs_cue
     cf_interval=None,
     time_interval=None,
-    target_cf_hz=None,
+    target_cf_hz=None,  # scalar OR list/array with one value per group in data_list
     center_cf=None,
     bw_neurons=None,
     side='L',
@@ -1780,11 +1784,17 @@ def draw_rate_vs_cue_multidata(
         One color per group. Defaults to tab10 cycle.
     labels : list of str, optional
         One label per group. Defaults to 'group 0', 'group 1', ...
+    target_cf_hz : float OR list/array, optional
+        If a single float, the same target CF is applied to every group
+        (same behavior as before). If a list/array, it must have the same
+        length as data_list — element i gives the target CF (Hz) for
+        group i, so each group can be evaluated at its own single
+        characteristic-frequency neuron.
     error : str
         'sem' or 'std' — controls error band when group has multiple runs.
     shaded : bool
         True → fill_between; False → errorbar caps.
-    All CF selection, time_interval, cue_type, xlim params work
+    All other CF selection, time_interval, cue_type, xlim params work
     identically to draw_rate_vs_cue.
     """
     VALID_RATES = {'avg', 'pop', 'spk', 'spk_pn', 'mm_norm', 'max_norm'}
@@ -1812,48 +1822,34 @@ def draw_rate_vs_cue_multidata(
         labels = [f"group {i}" for i in range(n_groups)]
 
     # ------------------------------------------------------------------
-    # Resolve CF selection once from the first dataset of the first group
-    # (assumes all datasets share the same population size)
+    # Normalize target_cf_hz into a per-group list.
+    # Scalar (or None) → broadcast to every group (old behavior).
+    # list/array → must match n_groups, one target CF per group.
     # ------------------------------------------------------------------
-    _ref_data    = groups[0][0]
-    _cue_to_rate = _ref_data["cue_to_rate"]
-    _first_cue   = list(_cue_to_rate.keys())[0]
-    _n_tmp       = len(_cue_to_rate[_first_cue][side][pop]["global_ids"])
-    _cf_tmp      = greenwood_cf_array(CFMIN / Hz, CFMAX / Hz, _n_tmp) / Hz
-
-    resolved_cf_interval = cf_interval  # may stay None
-
-    if target_cf_hz is not None:
-        _, cf_idx            = take_closest(_cf_tmp, target_cf_hz)
-        half_bin             = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
-        resolved_cf_interval = [_cf_tmp[cf_idx] - half_bin, _cf_tmp[cf_idx] + half_bin]
-        print(
-            f"[draw_rate_vs_cue_multidata] target_cf_hz={target_cf_hz} Hz → "
-            f"neuron idx {cf_idx} → "
-            f"cf_interval=[{resolved_cf_interval[0]:.1f}, {resolved_cf_interval[1]:.1f}] Hz"
-        )
-    elif center_cf is not None and bw_neurons is not None:
-        _, center_idx = take_closest(_cf_tmp, center_cf)
-        low_idx  = max(0, center_idx - bw_neurons)
-        high_idx = min(_n_tmp - 1, center_idx + bw_neurons)
-        if low_idx == high_idx:
-            half_bin             = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
-            resolved_cf_interval = [_cf_tmp[low_idx] - half_bin, _cf_tmp[high_idx] + half_bin]
-        else:
-            resolved_cf_interval = [_cf_tmp[low_idx], _cf_tmp[high_idx]]
-        print(
-            f"[draw_rate_vs_cue_multidata] center_cf={center_cf} Hz → "
-            f"neuron idx [{low_idx}, {high_idx}] → "
-            f"cf_interval=[{resolved_cf_interval[0]:.1f}, {resolved_cf_interval[1]:.1f}] Hz"
-        )
-
-    # Resolve neuron count for spk_pn and title
-    if resolved_cf_interval is not None:
-        _, _ymin_idx = take_closest(_cf_tmp, resolved_cf_interval[0])
-        _, _ymax_idx = take_closest(_cf_tmp, resolved_cf_interval[1])
-        n_band = _ymax_idx - _ymin_idx + 1
+    if target_cf_hz is None or np.isscalar(target_cf_hz):
+        target_cf_hz_list = [target_cf_hz] * n_groups
     else:
-        n_band = _n_tmp
+        target_cf_hz_list = list(target_cf_hz)
+        if len(target_cf_hz_list) != n_groups:
+            raise ValueError(
+                f"target_cf_hz list must have the same length as data_list "
+                f"({n_groups} groups), got {len(target_cf_hz_list)}."
+            )
+        
+    # ------------------------------------------------------------------
+    # Normalize center_cf into a per-group list.
+    # Scalar (or None) → broadcast to every group (old behavior).
+    # list/array → must match n_groups, one center CF per group.
+    # ------------------------------------------------------------------
+    if center_cf is None or np.isscalar(center_cf):
+        center_cf_list = [center_cf] * n_groups
+    else:
+        center_cf_list = list(center_cf)
+        if len(center_cf_list) != n_groups:
+            raise ValueError(
+                f"center_cf list must have the same length as data_list "
+                f"({n_groups} groups), got {len(center_cf_list)}."
+            )
 
     # ------------------------------------------------------------------
     # Helper: filter spike dict by time window
@@ -1872,8 +1868,77 @@ def draw_rate_vs_cue_multidata(
     # ------------------------------------------------------------------
     fig, ax = plt.subplots(figsize=figsize)
     ylabel  = "Firing Rate [Hz]"  # overwritten inside loop
+    cf_infos = []  # per-group CF description, used in the title
 
-    for group, color, label in zip(groups, colors, labels):
+    for gi, (group, color, label) in enumerate(zip(groups, colors, labels)):
+        this_target_cf = target_cf_hz_list[gi]
+        this_center_cf = center_cf_list[gi]
+
+        # --------------------------------------------------------------
+        # Resolve CF interval for THIS group, using its own reference
+        # dataset (safe even if groups have different population sizes).
+        # --------------------------------------------------------------
+        _ref_data    = group[0]
+        _cue_to_rate = _ref_data["cue_to_rate"]
+        _first_cue   = list(_cue_to_rate.keys())[0]
+        _n_tmp       = len(_cue_to_rate[_first_cue][side][pop]["global_ids"])
+        _cf_tmp      = greenwood_cf_array(CFMIN / Hz, CFMAX / Hz, _n_tmp) / Hz
+
+        resolved_cf_interval = cf_interval  # may stay None
+        cf_idx = None
+
+        if this_target_cf is not None:
+            _, cf_idx             = take_closest(_cf_tmp, this_target_cf)
+            half_bin               = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
+            resolved_cf_interval   = [_cf_tmp[cf_idx] - half_bin, _cf_tmp[cf_idx] + half_bin]
+            print(
+                f"[draw_rate_vs_cue_multidata] group '{label}': "
+                f"target_cf_hz={this_target_cf} Hz → neuron idx {cf_idx} → "
+                f"cf_interval=[{resolved_cf_interval[0]:.1f}, {resolved_cf_interval[1]:.1f}] Hz"
+            )
+        elif this_center_cf is not None and bw_neurons is not None:
+            _, center_idx = take_closest(_cf_tmp, this_center_cf)
+            low_idx  = max(0, center_idx - bw_neurons)
+            high_idx = min(_n_tmp - 1, center_idx + bw_neurons)
+            if low_idx == high_idx:
+                half_bin             = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
+                resolved_cf_interval = [_cf_tmp[low_idx] - half_bin, _cf_tmp[high_idx] + half_bin]
+            else:
+                resolved_cf_interval = [_cf_tmp[low_idx], _cf_tmp[high_idx]]
+            print(
+                f"[draw_rate_vs_cue_multidata] group '{label}': "
+                f"center_cf={this_center_cf} Hz → neuron idx [{low_idx}, {high_idx}] → "
+                f"cf_interval=[{resolved_cf_interval[0]:.1f}, {resolved_cf_interval[1]:.1f}] Hz"
+            )
+
+        # Neuron count for spk_pn and title, resolved per group
+        if resolved_cf_interval is not None:
+            _, _ymin_idx = take_closest(_cf_tmp, resolved_cf_interval[0])
+            _, _ymax_idx = take_closest(_cf_tmp, resolved_cf_interval[1])
+            n_band = _ymax_idx - _ymin_idx + 1
+        else:
+            n_band = _n_tmp
+
+        if this_target_cf is not None:
+            cf_infos.append(f"{label}: CF={_cf_tmp[cf_idx]:.0f} Hz (1 neuron)")
+        elif this_center_cf is not None and bw_neurons is not None:
+            cf_infos.append(
+                f"{label}: CF={this_center_cf:.0f}±{bw_neurons}n → "
+                f"[{resolved_cf_interval[0]:.0f},{resolved_cf_interval[1]:.0f}] Hz "
+                f"({n_band} neurons)"
+            )
+        elif resolved_cf_interval is not None:
+            cf_infos.append(
+                f"{label}: CF=[{resolved_cf_interval[0]:.0f},{resolved_cf_interval[1]:.0f}] Hz "
+                f"({n_band} neurons)"
+            )
+        else:
+            cf_infos.append(f"{label}: CF=full ({n_band} neurons)")
+
+        # --------------------------------------------------------------
+        # Per-dataset firing rate extraction (unchanged apart from using
+        # this group's resolved_cf_interval)
+        # --------------------------------------------------------------
         all_avg   = []
         all_pop   = []
         all_count = []
@@ -1983,16 +2048,28 @@ def draw_rate_vs_cue_multidata(
             ax.set_xlim(xlim)
     elif cue_type == "itd":
         if xlim:
-            xlim_s       = [xlim[0] / 1e6, xlim[1] / 1e6]
+            xlim_s = [xlim[0]/1e6, xlim[1]/1e6]
             ax.set_xlim(xlim_s)
             visible_cues = [c for c in cues if xlim_s[0] <= c <= xlim_s[1]]
         else:
             visible_cues = cues
-        if len(visible_cues) > 11:
-            visible_cues = visible_cues[::2]
+
+        max_ticks = 11
+        if len(visible_cues) > max_ticks:
+            step = max(1, len(visible_cues) // max_ticks)
+            subsampled = visible_cues[::step]
+            # Ensure 0 is always included
+            if 0.0 not in subsampled:
+                zero_idx = np.argmin(np.abs(np.array(visible_cues)))
+                zero_val = visible_cues[zero_idx]
+                subsampled = sorted(set(subsampled) | {zero_val})
+            visible_cues = subsampled
+
         ax.set_xticks(visible_cues)
         ax.set_xticklabels(
-            [f"{round(c * 1e6)}" for c in visible_cues], rotation=45, ha='right'
+            [f"{round(c * 1e6)}" for c in visible_cues],
+            rotation=45,
+            ha='right'
         )
         ax.set_xlabel("ITD [µs]")
     elif cue_type == "ild":
@@ -2013,31 +2090,18 @@ def draw_rate_vs_cue_multidata(
     ax.spines["right"].set_visible(False)
 
     # ------------------------------------------------------------------
-    # Title
+    # Title — CF info is now per-group since each group may target a
+    # different characteristic frequency.
     # ------------------------------------------------------------------
-    filter_parts = []
+    header_parts = []
     if time_interval is not None:
-        filter_parts.append(f"t=[{time_interval[0]},{time_interval[1]}] ms")
-    if target_cf_hz is not None:
-        filter_parts.append(f"CF={_cf_tmp[cf_idx]:.0f} Hz (1 neuron)")
-    elif center_cf is not None and bw_neurons is not None:
-        filter_parts.append(
-            f"CF={center_cf:.0f} ±{bw_neurons} neurons "
-            f"→ [{resolved_cf_interval[0]:.0f},{resolved_cf_interval[1]:.0f}] Hz "
-            f"({n_band} neurons)"
-        )
-    elif resolved_cf_interval is not None:
-        filter_parts.append(
-            f"CF=[{resolved_cf_interval[0]:.0f},{resolved_cf_interval[1]:.0f}] Hz "
-            f"({n_band} neurons)"
-        )
-    else:
-        filter_parts.append(f"CF=full ({n_band} neurons)")
+        header_parts.append(f"t=[{time_interval[0]},{time_interval[1]}] ms")
 
     base_title = f"{pop} — side {side} ({n_groups} groups)"
-    ax.set_title(
-        base_title + ("  |  " + ", ".join(filter_parts) if filter_parts else "")
-    )
+    subtitle   = "  |  ".join(header_parts + cf_infos) if (header_parts or cf_infos) else ""
+    # ax.set_title(base_title + ("\n" + subtitle if subtitle else ""), fontsize=9)
+    ax.set_title(base_title)
+
     if title:
         fig.suptitle(title, fontsize=13, fontweight='bold')
 
@@ -3012,6 +3076,7 @@ def get_avg_rate_vs_cue(
     data,
     pop='LSO',
     side='L',
+    rate='avg',
     cf_interval=None,
     time_interval=None,
     target_cf_hz=None,
@@ -3019,16 +3084,24 @@ def get_avg_rate_vs_cue(
     bw_neurons=None,
 ):
     """
-    Extract the raw (cues, avg_firing_rate) curve for one population/side,
-    reusing the exact CF-resolution and rate-calculation logic used in
-    draw_rate_vs_cue. Intended to feed extract_ild50_metrics.
+    Extract the raw (cues, rate_curve) for one population/side, reusing the
+    exact CF-resolution and rate-calculation logic used in draw_rate_vs_cue.
+ 
+    `rate` selects which quantity is returned — same options as
+    draw_rate_vs_cue: 'avg', 'pop', 'spk', 'spk_pn', 'mm_norm', 'max_norm'.
+    Default ('avg') is unchanged from before, so existing calls (e.g. from
+    extract_ild50_metrics) keep working without edits.
     """
+    VALID_RATES = {'avg', 'pop', 'spk', 'spk_pn', 'mm_norm', 'max_norm'}
+    if rate not in VALID_RATES:
+        raise ValueError(f"rate must be one of {VALID_RATES}, got {rate!r}")
+ 
     if isinstance(data, list):
         multi_data = data
         data = data[0]
     else:
         multi_data = [data]
-
+ 
     cue_to_rate = data["cue_to_rate"]
     default_duration = (
         data["basesound"].sound.duration / b2.ms
@@ -3036,7 +3109,7 @@ def get_avg_rate_vs_cue(
         else data["sounds"]["base_sound"].sound.duration / b2.ms
     )
     duration = data.get("simulation_time", default_duration) * b2.ms
-
+ 
     # --- CF interval resolution (identical to draw_rate_vs_cue) ---
     if target_cf_hz is not None:
         _first_cue = list(cue_to_rate.keys())[0]
@@ -3045,7 +3118,6 @@ def get_avg_rate_vs_cue(
         _, cf_idx = take_closest(_cf_tmp, target_cf_hz)
         half_bin = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
         cf_interval = [_cf_tmp[cf_idx] - half_bin, _cf_tmp[cf_idx] + half_bin]
-
     elif center_cf is not None and bw_neurons is not None:
         _first_cue = list(cue_to_rate.keys())[0]
         _n_tmp = len(cue_to_rate[_first_cue]["L"][pop]["global_ids"])
@@ -3058,7 +3130,7 @@ def get_avg_rate_vs_cue(
             cf_interval = [_cf_tmp[low_idx] - half_bin, _cf_tmp[high_idx] + half_bin]
         else:
             cf_interval = [_cf_tmp[low_idx], _cf_tmp[high_idx]]
-
+ 
     def _filter_spike_dict(spike_dict, time_interval):
         times, gids = spike_dict["times"], spike_dict["global_ids"]
         senders = spike_dict["senders"]
@@ -3066,15 +3138,15 @@ def get_avg_rate_vs_cue(
             return spike_dict
         mask = (times >= time_interval[0]) & (times <= time_interval[1])
         return {"times": times[mask], "senders": senders[mask], "global_ids": gids}
-
+ 
     effective_duration = (
         (time_interval[1] - time_interval[0]) * b2.ms
         if time_interval is not None else duration
     )
-
+ 
     cues = sorted(cue_to_rate.keys())
-    all_avg = []
-
+    all_pop, all_avg, all_count = [], [], []
+ 
     for d in multi_data:
         angle_to_rate_d = d["cue_to_rate"]
         if time_interval is not None:
@@ -3092,23 +3164,57 @@ def get_avg_rate_vs_cue(
                 "simulation_time",
                 data["sounds"]["base_sound"].sound.duration / b2.ms,
             ) * b2.ms
-
-        _, avg_d, _ = calculate_firing_rates(atr, pop, [side], cues, dur_d, cf_interval)
+ 
+        pop_d, avg_d, cnt_d = calculate_firing_rates(atr, pop, [side], cues, dur_d, cf_interval)
+        all_pop.append(pop_d[side])
         all_avg.append(avg_d[side])
-
+        all_count.append(cnt_d[side])
+ 
+    mean_pop = np.mean(all_pop, axis=0)
     mean_avg = np.mean(all_avg, axis=0)
-    sem_avg = (
-        np.std(all_avg, axis=0) / np.sqrt(len(multi_data))
-        if len(multi_data) > 1 else None
-    )
-
+    mean_count = np.mean(all_count, axis=0)
+ 
+    n_reps = len(multi_data)
+    _sem = lambda arr: (np.std(arr, axis=0) / np.sqrt(n_reps)) if n_reps > 1 else None
+    sem_pop, sem_avg, sem_count = _sem(all_pop), _sem(all_avg), _sem(all_count)
+ 
+    # neuron count in the resolved CF band, needed for spk_pn
+    _first_cue = list(cue_to_rate.keys())[0]
+    _n_tmp = len(cue_to_rate[_first_cue]["L"][pop]["global_ids"])
+    if cf_interval is not None:
+        _cf_tmp = greenwood_cf_array(CFMIN / Hz, CFMAX / Hz, _n_tmp) / Hz
+        _, _ymin_idx = take_closest(_cf_tmp, cf_interval[0])
+        _, _ymax_idx = take_closest(_cf_tmp, cf_interval[1])
+        n_neurons = _ymax_idx - _ymin_idx + 1
+    else:
+        n_neurons = _n_tmp
+ 
+    if rate == 'avg':
+        curve, curve_sem = mean_avg, sem_avg
+    elif rate == 'pop':
+        curve, curve_sem = mean_pop, sem_pop
+    elif rate == 'spk':
+        curve, curve_sem = mean_count, sem_count
+    elif rate == 'spk_pn':
+        curve = np.array(mean_count) / n_neurons
+        curve_sem = (np.array(sem_count) / n_neurons) if sem_count is not None else None
+    elif rate == 'mm_norm':
+        normed, _ = normalize_rates({side: mean_avg}, [side])
+        curve = normed[side]
+        curve_sem = sem_avg  # error stays in original avg-rate units; rescale if you plot it normalized
+    elif rate == 'max_norm':
+        curve = np.array(mean_avg) / np.max(mean_avg)
+        curve_sem = sem_avg
+ 
     return {
         "cues": np.array(cues, dtype=float),
-        "rate": np.array(mean_avg, dtype=float),
-        "sem": sem_avg,
+        "rate": np.array(curve, dtype=float),
+        "sem": curve_sem,
+        "rate_mode": rate,
         "cf_interval": cf_interval,
+        "n_neurons": n_neurons,
     }
-
+ 
 def four_param_sigmoid(x, bottom, top, ild50, slope):
     """4-parameter logistic. slope>0 -> decreasing curve, slope<0 -> increasing."""
     return bottom + (top - bottom) / (1.0 + np.exp((x - ild50) / slope))
@@ -3163,7 +3269,7 @@ def extract_ild50_metrics(
             ref_val = rate[idx]
         if ref_val == 0:
             raise ValueError("Reference (monaural ipsi) rate is 0 — cannot normalize.")
-        y = 100.0 * rate / ref_val
+        y = 1 * rate / ref_val
     else:
         y = rate
 
@@ -3486,7 +3592,249 @@ def extract_first_spike_latency_metrics(
         "neuron_gid": neuron_gid, "neuron_cf": neuron_cf,
     }
 
-
+def extract_mso_itd_peak_metrics(
+    data_by_freq,
+    pop='MSO',
+    side='L',
+    cf_interval=None,
+    target_cf_hz=None,
+    center_cf=None,
+    bw_neurons=None,
+    time_interval=None,
+    fit_gaussian=True,
+    gaussian_window=2,
+):
+    """
+    Per-neuron ITD-tuning peak extraction for MSO. Complementary to the
+    CD/CP pipeline (which derives best IPD from vector analysis + Rayleigh
+    test): here the "best ITD" is read directly off the rate-vs-ITD curve.
+    Useful as a sanity check, and as a fallback for neurons that don't hit
+    3+ significant frequencies for CD/CP regression.
+ 
+    data_by_freq: {freq_hz: dataset}, same convention as the CD/CP function:
+    dataset["cue_to_rate"][itd_seconds][side][pop] holds the spike dict
+    {times, senders, global_ids} for an ITD sweep at that frequency.
+    (If your actual layout differs — e.g. a single dataset keyed by
+    (freq, itd) tuples instead of one dict per frequency — the CF-band
+    resolution and _per_neuron_curve extraction below are the two spots
+    to adapt; everything downstream operates on plain (itds, curve) arrays.)
+ 
+    For each neuron and each frequency:
+      1. builds the raw rate-vs-ITD curve (spike count / duration, per neuron)
+      2. argmax → raw peak ITD
+      3. 3-point parabolic (Lagrange) interpolation around the argmax for
+         sub-bin peak precision — this is the main "find the peak" step
+      4. optionally fits offset + amp*exp(-(x-mu)^2/2sigma^2) on a small
+         window around the peak, as a smoother alternative to (3)
+ 
+    Returns {neuron_id: {...}} with per-frequency curves/peaks plus a
+    frequency-independent summary: best_freq (frequency giving the highest
+    peak rate for that neuron) and best_itd (parabolic peak ITD at that
+    frequency).
+    """
+    freqs = sorted(data_by_freq.keys())
+ 
+    # --- resolve which neurons fall in the CF band, from the first frequency ---
+    _first_data = data_by_freq[freqs[0]]
+    _first_cue_to_rate = _first_data["cue_to_rate"]
+    _first_cue = list(_first_cue_to_rate.keys())[0]
+    all_gids = np.array(_first_cue_to_rate[_first_cue][side][pop]["global_ids"])
+    n_total = len(all_gids)
+ 
+    if target_cf_hz is not None:
+        _cf_tmp = greenwood_cf_array(CFMIN / Hz, CFMAX / Hz, n_total) / Hz
+        _, cf_idx = take_closest(_cf_tmp, target_cf_hz)
+        half_bin = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
+        cf_interval = [_cf_tmp[cf_idx] - half_bin, _cf_tmp[cf_idx] + half_bin]
+    elif center_cf is not None and bw_neurons is not None:
+        _cf_tmp = greenwood_cf_array(CFMIN / Hz, CFMAX / Hz, n_total) / Hz
+        _, center_idx = take_closest(_cf_tmp, center_cf)
+        low_idx = max(0, center_idx - bw_neurons)
+        high_idx = min(n_total - 1, center_idx + bw_neurons)
+        if low_idx == high_idx:
+            half_bin = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
+            cf_interval = [_cf_tmp[low_idx] - half_bin, _cf_tmp[high_idx] + half_bin]
+        else:
+            cf_interval = [_cf_tmp[low_idx], _cf_tmp[high_idx]]
+ 
+    if cf_interval is not None:
+        _cf_tmp = greenwood_cf_array(CFMIN / Hz, CFMAX / Hz, n_total) / Hz
+        _, lo = take_closest(_cf_tmp, cf_interval[0])
+        _, hi = take_closest(_cf_tmp, cf_interval[1])
+        neuron_ids = all_gids[lo:hi + 1]
+    else:
+        neuron_ids = all_gids
+ 
+    def _filter_spike_dict(spike_dict, time_interval):
+        times, senders, gids = spike_dict["times"], spike_dict["senders"], spike_dict["global_ids"]
+        if time_interval is None:
+            return spike_dict
+        mask = (times >= time_interval[0]) & (times <= time_interval[1])
+        return {"times": times[mask], "senders": senders[mask], "global_ids": gids}
+ 
+    def _per_neuron_curve(dataset):
+        cue_to_rate = dataset["cue_to_rate"]
+        default_duration = (
+            dataset["basesound"].sound.duration / b2.ms
+            if "basesound" in dataset
+            else dataset["sounds"]["base_sound"].sound.duration / b2.ms
+        )
+        duration_ms = dataset.get("simulation_time", default_duration)
+        if time_interval is not None:
+            duration_ms = time_interval[1] - time_interval[0]
+        duration_s = duration_ms / 1000.0
+ 
+        itds = sorted(cue_to_rate.keys())
+        curves = {nid: np.zeros(len(itds)) for nid in neuron_ids}
+        for ci, itd in enumerate(itds):
+            sd = cue_to_rate[itd][side][pop]
+            if time_interval is not None:
+                sd = _filter_spike_dict(sd, time_interval)
+            senders = np.asarray(sd["senders"])
+            for nid in neuron_ids:
+                curves[nid][ci] = np.sum(senders == nid) / duration_s
+        return np.array(itds, dtype=float), curves
+ 
+    def _parabolic_refine(x, y, idx):
+        """3-point Lagrange parabola through the peak and its two neighbors."""
+        if idx == 0 or idx == len(x) - 1:
+            return x[idx], y[idx]
+        x0, x1, x2 = x[idx - 1], x[idx], x[idx + 1]
+        y0, y1, y2 = y[idx - 1], y[idx], y[idx + 1]
+        denom = (x0 - x1) * (x0 - x2) * (x1 - x2)
+        if denom == 0:
+            return x1, y1
+        A = (x2 * (y1 - y0) + x1 * (y0 - y2) + x0 * (y2 - y1)) / denom
+        B = (x2**2 * (y0 - y1) + x1**2 * (y2 - y0) + x0**2 * (y1 - y2)) / denom
+        if A == 0:
+            return x1, y1
+        C = y1 - A * x1**2 - B * x1
+        x_peak = -B / (2 * A)
+        y_peak = A * x_peak**2 + B * x_peak + C
+        return x_peak, y_peak
+ 
+    def _gaussian_refine(x, y, idx, window):
+        lo = max(0, idx - window)
+        hi = min(len(x), idx + window + 1)
+        xw, yw = np.asarray(x[lo:hi]), np.asarray(y[lo:hi])
+        if len(xw) < 4:
+            return None
+        def gauss(t, offset, amp, mu, sigma):
+            return offset + amp * np.exp(-((t - mu) ** 2) / (2 * sigma**2))
+        span = (xw[-1] - xw[0]) or 1e-9
+        p0 = [np.min(yw), np.max(yw) - np.min(yw), x[idx], span / 4]
+        try:
+            popt, _ = curve_fit(gauss, xw, yw, p0=p0, maxfev=5000)
+            return popt[2]  # mu
+        except Exception:
+            return None
+ 
+    results = {}
+    for nid in neuron_ids:
+        per_freq = {}
+        best_freq, best_rate = None, -np.inf
+ 
+        for f in freqs:
+            itds, curves = _per_neuron_curve(data_by_freq[f])
+            curve = curves[nid]
+            idx = int(np.argmax(curve))
+            raw_itd, raw_rate = itds[idx], curve[idx]
+            par_itd, par_rate = _parabolic_refine(itds, curve, idx)
+            gauss_itd = (
+                _gaussian_refine(itds, curve, idx, gaussian_window)
+                if fit_gaussian else None
+            )
+ 
+            per_freq[f] = {
+                "itds": itds,
+                "curve": curve,
+                "raw_peak_itd": raw_itd,
+                "raw_peak_rate": raw_rate,
+                "parabolic_peak_itd": par_itd,
+                "parabolic_peak_rate": par_rate,
+                "gaussian_peak_itd": gauss_itd,
+            }
+            if raw_rate > best_rate:
+                best_rate, best_freq = raw_rate, f
+ 
+        results[nid] = {
+            "by_freq": per_freq,
+            "best_freq": best_freq,
+            "best_itd": per_freq[best_freq]["parabolic_peak_itd"],
+            "best_itd_raw": per_freq[best_freq]["raw_peak_itd"],
+            "best_itd_gaussian": per_freq[best_freq]["gaussian_peak_itd"],
+        }
+ 
+    return results
+ 
+def extract_best_itd_ipd(curve, freq_hz):
+    """
+    Given one population-level curve dict from get_avg_rate_vs_cue
+    (curve['cues'] = ITDs in seconds, curve['rate'] = rate vs ITD) and the
+    tone frequency it was recorded at, find the peak of the curve (best
+    ITD) and convert it to best IPD (in cycles) via IPD = ITD * freq.
+ 
+    Returns one dict per call -- accumulate these across your frequency
+    loop, then pass the list to plot_best_itd_ipd_vs_freq.
+    """
+    itds = np.asarray(curve["cues"])
+    rates = np.asarray(curve["rate"])
+ 
+    idx = int(np.argmax(rates))
+    raw_itd, raw_rate = itds[idx], rates[idx]
+ 
+    # 3-point parabolic refine for sub-bin precision
+    if 0 < idx < len(itds) - 1:
+        x0, x1, x2 = itds[idx - 1], itds[idx], itds[idx + 1]
+        y0, y1, y2 = rates[idx - 1], rates[idx], rates[idx + 1]
+        denom = (x0 - x1) * (x0 - x2) * (x1 - x2)
+        A = (x2 * (y1 - y0) + x1 * (y0 - y2) + x0 * (y2 - y1)) / denom if denom else 0
+        B = (x2**2 * (y0 - y1) + x1**2 * (y2 - y0) + x0**2 * (y1 - y2)) / denom if denom else 0
+        if A != 0:
+            best_itd = -B / (2 * A)
+            best_rate = A * best_itd**2 + B * best_itd + (y1 - A * x1**2 - B * x1)
+        else:
+            best_itd, best_rate = raw_itd, raw_rate
+    else:
+        best_itd, best_rate = raw_itd, raw_rate
+ 
+    best_ipd_cycles = best_itd * freq_hz  # ITD in seconds * freq in Hz -> cycles
+    best_ipd_deg = best_ipd_cycles * 360.0
+ 
+    return {
+        "freq_hz": freq_hz,
+        "best_itd": best_itd,          # seconds
+        "best_rate": best_rate,
+        "best_ipd_cycles": best_ipd_cycles,
+        "best_ipd_deg": best_ipd_deg,
+    }
+ 
+def plot_best_itd_ipd_vs_freq(results, figsize=(10, 4)):
+    """
+    results: list of dicts as returned by extract_best_itd_ipd, one per
+    frequency. Plots best ITD (µs) and best IPD (cycles) vs frequency.
+    """
+    results = sorted(results, key=lambda r: r["freq_hz"])
+    freqs = [r["freq_hz"] for r in results]
+    itds_us = [r["best_itd"] * 1e6 for r in results]
+    ipds_cyc = [r["best_ipd_cycles"] for r in results]
+ 
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
+ 
+    ax1.plot(freqs, itds_us, "o-", color="m")
+    ax1.set_xlabel("Frequency [Hz]")
+    ax1.set_ylabel("Best ITD [µs]")
+    ax1.set_title("Best ITD vs Frequency")
+ 
+    ax2.plot(freqs, ipds_cyc, "o-", color="g")
+    ax2.set_xlabel("Frequency [Hz]")
+    ax2.set_ylabel("Best IPD [cycles]")
+    ax2.set_title("Best IPD vs Frequency")
+ 
+    plt.tight_layout()
+    plt.show()
+    return fig, (ax1, ax2)
+ 
 # ─────────────────────────────────────────────────────────────────────────────
 # PLOTTING
 # ─────────────────────────────────────────────────────────────────────────────
