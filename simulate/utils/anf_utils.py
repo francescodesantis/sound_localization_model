@@ -63,29 +63,23 @@ def create_sound_key(sound):
 
 
 def load_anf_response(sound, condition_val, cochlea_key, params, ignore_cache=False):
-    # Get the specific cochlea function (Zilany, Gammatone, etc.)
     cochlea_func: MemorizedFunc = COCHLEAS[cochlea_key]
-    
-    # Extract the params for this specific cochlea
     specific_params = params[cochlea_key]
-    
-    # Get the mode to make logging clearer
-    mode = specific_params['hrtf_params']['simulation_mode']    
+    mode = specific_params['hrtf_params']['simulation_mode']
     logger.info(f"Subject: {specific_params['hrtf_params']['subj_number']} | Mode: {mode}")
 
-    # Joblib cache check using condition_val (could be deg, seconds, or dB)
     if not cochlea_func.check_call_in_cache(sound, condition_val, specific_params):
         logger.info(f"[load_anf_response] Saved ANF not found for {mode}={condition_val}. Regenerating...")
 
-    if ignore_cache:
-        cochlea_func = cochlea_func.call
     try:
-        # Every cochlea function in COCHLEAS must now handle condition_val based on mode
-        anf = cochlea_func(sound, condition_val, specific_params, plot_spikes=False)
+        if ignore_cache:
+            anf, _metadata = cochlea_func.call(sound, condition_val, specific_params, plot_spikes=False)
+        else:
+            anf = cochlea_func(sound, condition_val, specific_params, plot_spikes=False)
     except TypeError as e:
         logger.error(f"Error calling {cochlea_key}: {e}")
         raise e
-        
+
     return anf
 
 
