@@ -67,10 +67,10 @@ if __name__ == "__main__":
     LEVEL = 60
 
     inputs = [
-        Tone(16 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
+        # Tone(16 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
         #Click(duration=TIME_SIMULATION * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB),  
         # Tone(0.25 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB, ramp_ms=RAMP_MS, offset_silence_duration= TIME_OFF * b2.ms),
-        #Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
+        Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=4*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=3*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
     #     Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB, interval=2*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
@@ -79,9 +79,9 @@ if __name__ == "__main__":
     ]
 
     # CONFIGURATION
-    MODE = "artificial_ild_exp"  # options: "angle", "artificial_itd", "artificial_ild"
+    MODE = "artificial_itd"  # options: "angle", "artificial_itd", "artificial_ild"
     we = 5
-    wi = -80
+    wi = 0
     d = 0.78
     experiment_folder = f'we_{we}_wi_{wi}' 
     
@@ -124,9 +124,9 @@ if __name__ == "__main__":
         # p.TAUS_EX_RISE.MSO = 0.5
         # p.TAUS_EX_DECAY.MSO = 1.0
 
-    for seed in range(5):
+    for seed in [0]:
         rng = 42 + seed
-        p = params(f"d{d}_seed{seed}")
+        p = params(f"d{d}_seed{seed}_multimeters_newitds")
         p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
         p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
         p.SYN_WEIGHTS.SBCs2LSO = we
@@ -161,7 +161,7 @@ if __name__ == "__main__":
 
                     logger.info(f"starting trial for {val}")
                     # this section is cached on disk
-                    anf = load_anf_response(input, val, cochlea_key, param.cochlea)
+                    anf = load_anf_response(input, val, cochlea_key, param.cochlea, ignore_cache=True)
 
                     L_sounds[val] = anf.left_sound
                     R_sounds[val] = anf.right_sound

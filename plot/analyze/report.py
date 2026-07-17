@@ -20,7 +20,7 @@ simulate_repo = PROJECT_ROOT + '/simulate'
 sys.path.insert(0, simulate_repo)
 from utils.anf_utils import create_sound_key
 
-plt.rcParams["axes.grid"] = True
+plt.rcParams["axes.grid"] = False
 plt.rcParams['axes.titlesize'] = 12
 plt.rcParams['axes.titleweight']= 'bold'
 plt.rcParams['axes.spines.top']= False
@@ -1355,7 +1355,8 @@ def draw_rate_vs_cue(
     error='sem',
     shaded=True,
     cue_type="angle",
-    xlim=None
+    xlim=None,
+    ipsi_level = None
 ):
 
     VALID_RATES = {'avg', 'pop', 'spk', 'spk_pn', 'mm_norm', 'max_norm',}
@@ -1620,16 +1621,9 @@ def draw_rate_vs_cue(
             else:
                 visible_cues = cues
 
-            max_ticks = 11
+            max_ticks = 8
             if len(visible_cues) > max_ticks:
-                step = max(1, len(visible_cues) // max_ticks)
-                subsampled = visible_cues[::step]
-                # Ensure 0 is always included
-                if 0.0 not in subsampled:
-                    zero_idx = np.argmin(np.abs(np.array(visible_cues)))
-                    zero_val = visible_cues[zero_idx]
-                    subsampled = sorted(set(subsampled) | {zero_val})
-                visible_cues = subsampled
+                visible_cues = np.concatenate([np.linspace(-0.005, -0.001,  4, endpoint=False),np.linspace(-0.001,  0.001, 5),np.linspace(0.001,  0.005,  5)[1:]])
 
             ax.set_xticks(visible_cues)
             ax.set_xticklabels(
@@ -1638,18 +1632,19 @@ def draw_rate_vs_cue(
                 ha='right'
             )
             ax.set_xlabel("ITD [µs]")
+            ax.axvline(0, color = 'k', linewidth = 0.5)
 
         elif cue_type == "ild":
             visible_cues = cues
             if len(visible_cues) > 11:
                 visible_cues = visible_cues[::2]
             ax.set_xticks(visible_cues)
-            ax.set_xticklabels([f"{c}" for c in visible_cues])
+            ax.set_xticklabels([f"{round(ipsi_level - c)}" for c in visible_cues])
             ax.set_xlabel("ILD [dB]")
             if xlim:
                 ax.set_xlim(xlim)
 
-        elif cue_type == "ild_exp":
+        elif cue_type == "contra_level":
             visible_cues = cues
             if len(visible_cues) > 11:
                 visible_cues = visible_cues[::2]
@@ -1767,6 +1762,7 @@ def draw_rate_vs_cue_multidata(
     xlim=None,
     alpha=0.8,
     lw=1.5,
+    ipsi_level = None
 ):
     """
     Plot cue vs firing rate comparing groups of datasets.
@@ -2077,8 +2073,17 @@ def draw_rate_vs_cue_multidata(
         if len(visible_cues) > 11:
             visible_cues = visible_cues[::2]
         ax.set_xticks(visible_cues)
-        ax.set_xticklabels([f"{c}" for c in visible_cues])
+        ax.set_xticklabels([f"{round(ipsi_level - c)}" for c in visible_cues])
         ax.set_xlabel("ILD [dB]")
+        if xlim:
+            ax.set_xlim(xlim)
+    elif cue_type == "contra_level":
+        visible_cues = cues
+        if len(visible_cues) > 11:
+            visible_cues = visible_cues[::2]
+        ax.set_xticks(visible_cues)
+        ax.set_xticklabels([f"{c}" for c in visible_cues])
+        ax.set_xlabel("Contra Level [dB]")
         if xlim:
             ax.set_xlim(xlim)
 
@@ -3978,3 +3983,317 @@ def plot_psth_per_angle(res, pop, cues,
 
     plt.tight_layout()
     plt.show()
+
+#### for paper:
+def draw_single_neuron_raster_xpaper(
+    data_list,
+    pop,
+    side,
+    cue,
+    target_cf_hz=None,
+    center_cf=None,
+    bw_neurons=0,
+    xlim=None,
+    dot_size=1,
+    color=None,
+    labels=None,
+    figsize=(10, 4),
+):
+    if not data_list:
+        raise ValueError("data_list is empty")
+
+    if color is None:
+        color = 'm' if side == 'L' else 'g'
+
+    n_reps = len(data_list)
+    if labels is None:
+        labels = [range(n_reps)]
+
+    # ------------------------------------------------------------------
+    # Resolve target neuron index from the first dataset
+    # ------------------------------------------------------------------
+    _ref       = data_list[0]
+    _ctr       = _ref["cue_to_rate"]
+    _spikes0   = _ctr[cue][side][pop]
+    _gids      = _spikes0["global_ids"]
+    _n         = len(_gids)
+    _cf_arr    = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n) / b2.Hz
+
+    if target_cf_hz is not None:
+        _, neuron_idx = take_closest(_cf_arr, target_cf_hz)
+    elif center_cf is not None:
+        _, center_idx = take_closest(_cf_arr, center_cf)
+        neuron_idx    = int(np.clip(center_idx + bw_neurons, 0, _n - 1))
+    else:
+        raise ValueError("Provide either target_cf_hz or center_cf.")
+
+    neuron_gid = int(_gids[0]) + neuron_idx
+    neuron_cf  = float(_cf_arr[neuron_idx])
+
+    print(
+        f"[draw_single_neuron_raster] pop={pop} side={side} "
+        f"→ neuron idx={neuron_idx}, GID={neuron_gid}, CF={neuron_cf:.1f} Hz"
+    )
+
+    cues = sorted(_ctr.keys())
+
+    if xlim is None:
+        _default_dur = (
+            _ref["basesound"].sound.duration / b2.ms
+            if "basesound" in _ref
+            else _ref["sounds"]["base_sound"].sound.duration / b2.ms
+        )
+        _dur = _ref.get("simulation_time", _default_dur)
+        xlim = [0.0, float(_dur)]
+
+    # ------------------------------------------------------------------
+    # Layout: raster only
+    # ------------------------------------------------------------------
+    fig, ax_raster = plt.subplots(figsize=figsize)
+
+    # ------------------------------------------------------------------
+    # Raster
+    # ------------------------------------------------------------------
+    for rep_idx, d in enumerate(data_list):
+        spikes  = d["cue_to_rate"][cue][side][pop]
+        times   = spikes["times"]
+        senders = spikes["senders"]
+        mask    = (
+            (senders == neuron_gid) &
+            (times   >= xlim[0])   &
+            (times   <= xlim[1])
+        )
+        rep_times = times[mask]
+
+        y_vals = np.full(len(rep_times), rep_idx)
+        ax_raster.plot(
+            rep_times, y_vals, '.',
+            color=color,
+            markersize=dot_size * 4,
+            markeredgewidth=dot_size * 0.6,
+        )
+
+    ax_raster.set_xlim(xlim)
+    ax_raster.set_ylim(-0.5, n_reps - 0.5)
+    ax_raster.invert_yaxis()
+    ax_raster.set_yticks(range(n_reps))
+    ax_raster.set_yticklabels([])
+    ax_raster.set_xlabel("Time [ms]")
+    ax_raster.spines["top"].set_visible(False)
+    ax_raster.spines["right"].set_visible(False)
+
+    plt.tight_layout()
+    return fig, ax_raster
+
+def draw_single_neuron_raster_by_cue_xpaper(
+    data,
+    pop,
+    side,
+    target_cf_hz=None,
+    center_cf=None,
+    bw_neurons=0,
+    xlim=None,
+    ylim=None,
+    dot_size=2,
+    color=None,
+    cues_to_plot=None,
+    title=None,
+    figsize=(10, 5),
+):
+    """
+    Raster plot for a SINGLE result (one seed/recording): each row on the
+    y-axis is a different cue (e.g. azimuth/ITD/ILD), for one selected
+    neuron — as opposed to draw_single_neuron_raster, where rows are
+    repetitions of the same cue.
+    """
+    if color is None:
+        color = 'm' if side == 'L' else 'g'
+
+    _ctr = data["cue_to_rate"]
+    all_cues = sorted(_ctr.keys())
+    cues = cues_to_plot if cues_to_plot is not None else all_cues
+    n_cues = len(cues)
+
+    # ---- Resolve target neuron (same logic, using first cue as reference) ----
+    _ref_cue = cues[0]
+    _spikes0 = _ctr[_ref_cue][side][pop]
+    _gids    = _spikes0["global_ids"]
+    _n       = len(_gids)
+    _cf_arr  = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n) / b2.Hz
+
+    if target_cf_hz is not None:
+        _, neuron_idx = take_closest(_cf_arr, target_cf_hz)
+    elif center_cf is not None:
+        _, center_idx = take_closest(_cf_arr, center_cf)
+        neuron_idx = int(np.clip(center_idx + bw_neurons, 0, _n - 1))
+    else:
+        raise ValueError("Provide either target_cf_hz or center_cf.")
+
+    neuron_gid = int(_gids[0]) + neuron_idx
+    neuron_cf  = float(_cf_arr[neuron_idx])
+
+    print(
+        f"[draw_single_neuron_raster_by_cue] pop={pop} side={side} "
+        f"→ neuron idx={neuron_idx}, GID={neuron_gid}, CF={neuron_cf:.1f} Hz"
+    )
+
+    if xlim is None:
+        _default_dur = (
+            data["basesound"].sound.duration / b2.ms
+            if "basesound" in data
+            else data["sounds"]["base_sound"].sound.duration / b2.ms
+        )
+        _dur = data.get("simulation_time", _default_dur)
+        xlim = [0.0, float(_dur)]
+
+    # ------------------------------------------------------------------
+    # Raster only
+    # ------------------------------------------------------------------
+    fig, ax_raster = plt.subplots(figsize=figsize)
+
+    for row_idx, cue in enumerate(cues):
+        spikes  = _ctr[cue][side][pop]
+        times   = spikes["times"]
+        senders = spikes["senders"]
+        mask = (
+            (senders == neuron_gid) &
+            (times   >= xlim[0]) &
+            (times   <= xlim[1])
+        )
+        cue_times = times[mask]
+
+        y_vals = np.full(len(cue_times), row_idx)
+        ax_raster.plot(
+            cue_times, y_vals, '.',
+            color=color,
+            markersize=dot_size * 4,
+        )
+
+    ax_raster.set_xlim(xlim)
+    ax_raster.set_ylim(ylim if ylim is not None else (-0.5, n_cues - 0.5))
+    ax_raster.set_yticks(range(n_cues))
+    ax_raster.set_yticklabels([f"{int(round(c))}" for c in cues])
+
+    ax_raster.set_xlabel("Time [ms]")
+    ax_raster.set_ylabel("Cue")
+
+    ax_raster.spines["top"].set_visible(False)
+    ax_raster.spines["right"].set_visible(False)
+
+    plt.tight_layout()
+    return fig, ax_raster
+
+def plot_ild50_fit_xpaper(
+    metrics,
+    ipsi_level,
+    ax=None,
+    figsize=(6, 4.5),
+    data_color='k',
+    fit_color='C3',
+    show_sem=True,
+    sem=None,
+    title=None,
+    xlabel="ILD (dB)",
+    ylabel="Firing Rate (%)",
+    n_fit_points=200,
+):
+    """
+    Plot the averaged data points (from extract_ild50_metrics) together with
+    the fitted sigmoid, expressed as ILD (contra - ipsi level), marking
+    ILD50 with a horizontal line from the y-axis to x=0, and dropping
+    vertical reference lines from ILD50 and from (0, 50) down to the x-axis.
+
+    Parameters
+    ----------
+    metrics : dict
+        Output of extract_ild50_metrics.
+    ipsi_level : float
+        Fixed ipsilateral sound level (dB), constant across all cues.
+        Used to convert contralateral levels (and ILD50) into ILD.
+    ax : matplotlib Axes, optional
+        Existing axes to draw on. Creates new figure if None.
+    show_sem : bool
+        If True and `sem` is provided, draws error bars on the data points.
+    sem : array-like, optional
+        Standard error per cue (e.g. curve["sem"] from get_avg_rate_vs_cue).
+        Only meaningful if metrics was NOT normalized (normalize=False),
+        since sem here is in raw Hz, not on the normalized scale.
+    """
+    # convert contralateral cues -> ILD (contra - ipsi)
+    ild = ipsi_level - metrics["cues"]
+    y = metrics["rate"]
+    fit_fn = metrics["fit_curve_fn"]
+
+    # rescale y to percentage if not already normalized 0-100
+    if metrics["normalized"]:
+        y_pct = y
+        def fit_fn_pct(x_contra):
+            return fit_fn(x_contra)
+    else:
+        rate_range = metrics["max_rate"] - metrics["min_rate"]
+        y_pct = 100 * (y - metrics["min_rate"]) / rate_range
+        def fit_fn_pct(x_contra):
+            return 100 * (fit_fn(x_contra) - metrics["min_rate"]) / rate_range
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+
+    # raw / normalized data points, plotted against ILD
+    sem_pct = None
+    if show_sem and sem is not None and not metrics["normalized"]:
+        sem_pct = 100 * np.asarray(sem) / (metrics["max_rate"] - metrics["min_rate"])
+        ax.errorbar(
+            ild, y_pct, yerr=sem_pct, fmt='o', color=data_color,
+            capsize=3, label='data (mean ± SEM)', zorder=3,
+        )
+    else:
+        ax.plot(ild, y_pct, 'o', color=data_color, label='data', zorder=3)
+
+    # smooth fitted sigmoid, evaluated in original contra-level space
+    x_fit_contra = np.linspace(metrics["cues"].min(), metrics["cues"].max(), n_fit_points)
+    x_fit_ild = ipsi_level - x_fit_contra
+    y_fit_pct = fit_fn_pct(x_fit_contra)
+    ax.plot(x_fit_ild, y_fit_pct, '-', color=fit_color, lw=2, label='sigmoid fit', zorder=2)
+
+    # ILD50: convert from contra level to ILD
+    ild50 = ipsi_level - metrics["ild50"]
+    y_at_ild50 = 50
+
+    # determine y-limits so error bars (if any) are fully visible
+    y_lo, y_hi = 0.0, 100.0
+    if sem_pct is not None:
+        y_lo = min(y_lo, np.min(y_pct - sem_pct))
+        y_hi = max(y_hi, np.max(y_pct + sem_pct))
+        pad = 0.05 * (y_hi - y_lo)
+        y_lo -= pad
+        y_hi += pad
+
+    ax.set_ylim(y_lo, y_hi)
+    # keep ticks at the standard 0-100 steps regardless of padded limits
+    ax.set_yticks(range(0, 125, 25))
+
+    ax.invert_xaxis()
+    xmin, xmax = ax.get_xlim()
+  
+
+    ax.plot(ild50, y_at_ild50, '*', color='b', ms=10, zorder=4,
+            label=f'ILD_50 = {abs(ild50):.1f} dB')
+
+    # horizontal line: from y-axis (xmin) to x = 0, at y = 50
+    ax.plot([xmin, ild50], [y_at_ild50, y_at_ild50],
+            color=fit_color, ls='--', lw=1, alpha=0.7)
+
+    # vertical line: from ILD50 down to bottom of axes (y_lo)
+    ax.plot([ild50, ild50], [y_lo, y_at_ild50],
+            color=fit_color, ls='--', lw=1, alpha=0.7)
+
+
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(y_lo, y_hi)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title or f"R² = {metrics['r_squared']:.3f}")
+    ax.legend(loc='best', fontsize=8)
+
+    return ax
