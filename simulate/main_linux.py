@@ -36,15 +36,15 @@ SEED = int(os.environ.get("SLURM_SEED", 0))   # fallback to 0 for local runs
 nucleus = 'LSO'
 we = 5
 wi = -80
-d = 0.78
+d = -3
 test_folder = f"we_{we}_wi_{wi}"
 
 inputs = [
     # Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB,
     #              interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
-    # Tone(0.5 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
+    # Tone(225 * b2.Hz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
     #      ramp_ms=RAMP_MS, offset_silence_duration=TIME_OFF * b2.ms),
-    Tone(19 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
+    Tone(14 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
          ramp_ms=RAMP_MS, offset_silence_duration=TIME_OFF * b2.ms),
 ]
 
@@ -62,8 +62,6 @@ elif MODE == "artificial_itd":
         np.linspace( 1000,  5000,  9)[1:]
     ]) * 1e-6
 elif MODE == "artificial_ild":
-    loop_range = np.linspace(-25, 25, 11)
-elif MODE == "artificial_ild_exp":
     loop_range = np.linspace(0, 90, 19) # dB
 
 cochlea_key = ZI_COC_KEY
@@ -89,7 +87,8 @@ p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
 p.CONFIG.NEST_KERNEL_PARAMS["rng_seed"] = rng
 p.SYN_WEIGHTS.SBCs2LSO = we
 p.SYN_WEIGHTS.MNTBCs2LSO = wi
-p.SYN_DELAYS.MNTBCs2LSO = d
+p.SYN_DELAYS.MNTBCs2LSO = 0.28
+p.SYN_DELAYS.SBCs2LSO = 4
 
 p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
 ps.append(p)
