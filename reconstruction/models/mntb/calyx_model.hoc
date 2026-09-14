@@ -1,0 +1,80 @@
+// Calyx of Held: the presynaptic giant terminal of the contralateral GBC axon,
+// apposed to the MNTB principal-cell soma, and the source of the prespike.
+//
+// This is a separate presynaptic cell from the MNTB principal neuron. In the
+// LFP pipeline it is a co-located auxiliary population driven by the same
+// contralateral GBC spike train; its transmembrane current, a giant
+// presynaptic AP, is the extracellular prespike that in vivo precedes the MNTB
+// spike by ~0.5 ms and shapes ABR wave III. Its dipole sums with the principal
+// cell's by linear superposition, at the same probe and head position.
+//
+// Geometry (Karadas 2021 [4]; Kulesza / Sierksma [7]):
+//   The calyx engulfs more than half the MNTB soma. Karadas idealise it as a
+//   half-ring (ring dia 13 um, wall 2 um), but that thin arc (~126 um2)
+//   understates the apposed area and so both the prespike and the cleft
+//   potential. It is modelled here as the engulfing cup: a cylinder dia 8 um,
+//   length 20 um along z (area ~500 um2, about half the 1257 um2 soma).
+//   precalyx_axon is the final unmyelinated pre-terminal segment, with high Na,
+//   and is the primary presynaptic current sink (Karadas: the pre-calyx axon
+//   Na at ~0.2 nS/um2 = 0.02 S/cm2 generates the prespike sink). It runs along
+//   +x (mediolateral), the GBC axon's approach across the midline.
+//
+// Channel densities at the terminal face (Karadas [4], converted pS/um2 to
+//   S/cm2, where 1 nS/um2 = 0.1 S/cm2):
+//     Na  200 pS/um2 -> 0.020 S/cm2   (Ca 40 pS/um2 omitted: no Ca mod in
+//     KLT 240 pS/um2 -> 0.024 S/cm2    models/mso, and Na dominates the field)
+//     KHT  80 pS/um2 -> 0.008 S/cm2
+//   The precalyx_axon uses a higher nodal Na so it reliably spikes and drives
+//   the terminal. Fast Na is namntb (models/mntb/namntb.mod); klt and kht
+//   kinetics come from models/mso.
+//
+// The cleft leak conductance g_cl ~ 1.0 uS (R_cleft ~ 1 MOhm; Sierksma 2021
+// [7]) is applied in the LFP and validation drivers through NEURON's
+// extracellular mechanism (xg set so xg*area = g_cl), giving a cleft node
+// whose potential rises several mV during the presynaptic AP.
+
+create precalyx_axon, calyx
+
+access precalyx_axon
+
+// Pre-terminal axon (+x -> origin), high Na = primary presynaptic sink
+precalyx_axon {
+    nseg = 5
+    Ra   = 150
+    cm   = 1.0
+    insert pas
+    g_pas = 1.0e-3
+    e_pas = -70.0
+    insert namntb
+    gbar_namntb = 0.30
+    ena = 55.0
+    insert kht
+    gbar_kht = 0.015
+    insert klt
+    gbar_klt = 0.010
+    ek = -77.0
+    pt3dadd(30, 0, 0, 1.5)
+    pt3dadd( 5, 0, 0, 1.5)
+}
+
+// Calyx terminal (half-ring, arc ~20 um along z, tube dia 2 um), apposed to soma
+calyx {
+    nseg = 5
+    Ra   = 150
+    cm   = 1.0
+    insert pas
+    g_pas = 1.0e-3
+    e_pas = -70.0
+    insert namntb
+    gbar_namntb = 0.020
+    ena = 55.0
+    insert klt
+    gbar_klt = 0.024
+    insert kht
+    gbar_kht = 0.008
+    ek = -77.0
+    pt3dadd(0, 0, -10, 8)
+    pt3dadd(0, 0,  10, 8)
+}
+
+connect calyx(0), precalyx_axon(1)

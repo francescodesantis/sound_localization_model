@@ -7,6 +7,7 @@ IHF_SPIKES
 .vscode
 ANF_SPIKETRAINS
 results/*
+RESULTS/
 **/*.pic
 myoga_cache
 secrets
@@ -14,22 +15,13 @@ secrets
 results
 .DS_Store
 simulate/jobs/*
-simulate/submit_job.sh
-simulate/job_array.sh
-cat > external/cochlea-1/.gitignore << 'EOF'
-# Compiled extensions
-*.so
-*.pyd
-
-# Cython-generated C files
-*.c
-
-# Build directory
-build/
-
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-EOF
-
+reconstruction/LFP_reconstruction/report_lfp_reconstruction.tex
+reconstruction/ABR_reconstruction/figures
+reconstruction/commands.txt
+reconstruction/ABR_reconstruction/plots/tolnai.py
+x86_64
+data/atlases/
+TEMPORARY/
+data/SOFA
+reconstruction/tests/__pycache__
+external/
