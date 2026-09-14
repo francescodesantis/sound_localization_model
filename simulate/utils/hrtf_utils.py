@@ -294,7 +294,7 @@ def run_hrtf(
     else:
         raise ValueError(f"Unknown cue_to_apply: {cue}")
     
-def apply_artificial_ild(sound: Sound, ild_db: float) -> Sound:
+def apply_artificial_ild_to_both(sound: Sound, ild_db: float) -> Sound:
     """Applies a pure gain difference to a mono sound."""
     fs = float(sound.samplerate)
     left = sound.copy()
@@ -307,7 +307,7 @@ def apply_artificial_ild(sound: Sound, ild_db: float) -> Sound:
     stereo = np.column_stack([np.asarray(left).flatten(), np.asarray(right).flatten()])
     return Sound(stereo, samplerate=fs*Hz)
 
-def apply_artificial_ild_exp(sound: Sound, lev_db: float) -> Sound:
+def apply_artificial_ild(sound: Sound, lev_db: float) -> Sound:
     """Applies a pure gain difference to a mono sound."""
     fs = float(sound.samplerate)
     left = sound.copy()
