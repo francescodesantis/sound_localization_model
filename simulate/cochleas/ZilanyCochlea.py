@@ -43,7 +43,7 @@ from utils.path_utils import Paths
 from utils.custom_sounds import Tone, ToneBurst
 from utils.log_utils import logger, tqdm
 from utils.cochlea_utils import CFMAX, CFMIN, NUM_CF, AnfResponse
-from utils.hrtf_utils import run_hrtf, apply_itd_to_sound, apply_artificial_ild, apply_artificial_ild_exp
+from utils.hrtf_utils import apply_artificial_ild_to_both, run_hrtf, apply_itd_to_sound, apply_artificial_ild
 
 # --- Setup ---
 COCHLEA_KEY = f"Zilany"
@@ -105,10 +105,10 @@ def sound_to_spikes(sound, condition_val, params, plot_spikes=False) -> AnfRespo
         binaural_raw = apply_artificial_ild(sound.sound, condition_val)
         gated_sound = sound.sound
 
-    elif mode == "artificial_ild_exp":
+    elif mode == "artificial_ild_to_both":
         # condition_val is ILD in dB
-        logger.info(f"[sound_to_spikes] Generating ANF spikes for ILD exp = {condition_val} dB")
-        binaural_raw = apply_artificial_ild_exp(sound.sound, condition_val)
+        logger.info(f"[sound_to_spikes] Generating ANF spikes for ILD (to both sounds)= {condition_val} dB")
+        binaural_raw = apply_artificial_ild_to_both(sound.sound, condition_val)
         gated_sound = sound.sound
 
 

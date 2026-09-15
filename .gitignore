@@ -5,8 +5,6 @@ __pycache__
 logs
 IHF_SPIKES
 .vscode
-.claude
-CLAUDE.md
 ANF_SPIKETRAINS
 results/*
 RESULTS/
