@@ -61,8 +61,8 @@ MPI_RANKS = 4 #8
 # True  = re-simulate every nucleus even when its dipole records already exist.
 # False = simulate only what is missing (safe to re-run after a crash, or to
 #         redraw figures without paying for the nuclei again OR to run monaural after a binaural run).
-FORCE_RERUN = False
-DRY_RUN = True
+FORCE_RERUN = True
+DRY_RUN = False
 
 '''
 IF DRY_RUN == True -> the script will print every command it would run
