@@ -25,10 +25,10 @@ plt.rcParams['axes.titlesize'] = 12
 plt.rcParams['axes.titleweight']= 'bold'
 plt.rcParams['axes.spines.top']= False
 plt.rcParams['axes.spines.right']= False
-plt.rcParams['axes.labelsize'] = 10
-plt.rcParams['xtick.labelsize'] = 10   # Size of x-axis tick labels
-plt.rcParams['ytick.labelsize'] = 10   # Size of y-axis tick labels
-plt.rcParams['legend.fontsize'] = 10   # Size of the legend text
+plt.rcParams['axes.labelsize'] = 16
+plt.rcParams['xtick.labelsize'] = 14   # Size of x-axis tick labels
+plt.rcParams['ytick.labelsize'] = 14  # Size of y-axis tick labels
+plt.rcParams['legend.fontsize'] = 12   # Size of the legend text
 # Make axis labels bold
 plt.rcParams['axes.labelweight'] = 'bold'  # Makes x and y axis labels bold
 
@@ -504,70 +504,22 @@ def normalize_rates(plotted_rate, sides):
 # LEFT vs RIGHT COMPARISON
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_tonotopic_heatmaps(
-    data,
-    pop='LSO',
-    num_cells_per_interval=1000,
-    time_interval=None,
-    row_norm=True,
-    title=None,
-    figsize=(8, 6),
-    cmap='viridis',
-    diff_cmap='coolwarm',
-    norm_max_given=None,
-    y_axis='cf',
-    f_ticks=None,
-    show_sides=True,
-    cue_type="angle",
-):
+def _compute_rate_matrices(data, pop, num_cells_per_interval, time_interval):
     """
-    Generates heatmaps for auditory neural responses across cues and frequency bands.
-
-    Parameters
-    ----------
-    data : dict
-        Simulation data dict containing 'cue_to_rate' and either 'simulation_time'
-        or data['sounds']['base_sound'].sound.duration.
-    pop : str, default='LSO'
-        Population name to analyse (e.g. 'LSO', 'MSO').
-    num_cells_per_interval : int, default=50
-        Number of cells per tonotopic frequency bin.
-    row_norm : bool, default=True
-        If True, normalise each frequency-row by its own maximum firing rate.
-    title : str, optional
-        Overall suptitle for the figure.
-    figsize : tuple, default=(8, 6)
-        Figure size (width, height) in inches.
-    cmap : str, default='viridis'
-        Colormap for the left- and right-ear heatmaps.
-    diff_cmap : str, default='coolwarm'
-        Diverging colormap for the L−R difference heatmap.
-    norm_max_given : float, optional
-        If provided, forces the symmetric colour scale of the difference map to
-        ±norm_max_given (only when it is larger than the data range).
-    y_axis : str, default='cf'
-        'cf'    → y-ticks show characteristic frequency in Hz / kHz
-        'cells' → y-ticks show cell-index ranges
-    f_ticks : list of float, optional
-        Explicit list of CFs (Hz) to mark on the y-axis. When None all intervals
-        are labelled (can be dense — use f_ticks to thin them out).
-    show_sides : bool, default=True
-        When True a 3-panel figure is produced (L, R, L−R).
-        When False only the difference panel is shown.
-    cue_type : str, default='angle'
-        Controls the x-axis label format:
-        'angle' → degrees  (e.g. −90°)
-        'itd'   → µs       (cue values treated as seconds, converted to µs)
-        'ild'   → dB
+    Core extraction + firing-rate computation for a single result dict.
+    This is steps 1-3 of the original plot_tonotopic_heatmaps, factored out
+    so it can be reused for single-result, averaged-multi-result, and
+    per-result-multi-result plotting.
 
     Returns
     -------
-    fig : matplotlib.figure.Figure
+    rate_matrices : dict {'L': ndarray, 'R': ndarray}  (unnormalised, shape (num_intervals, len(cues)))
+    cf_ids : ndarray, central CF (Hz) per tonotopic interval
+    cues : list, sorted cue values
+    num_intervals : int
+    num_neurons : int
     """
     # ------------------------------------------------------------------
-    # 1.  Extract top-level objects — new data layout
-    # ------------------------------------------------------------------
-# ------------------------------------------------------------------
     # 1.  Extract top-level objects
     # ------------------------------------------------------------------
     cue_to_rate = data["cue_to_rate"]
@@ -581,9 +533,9 @@ def plot_tonotopic_heatmaps(
 
     # Time-interval filtering — mirrors draw_rate_vs_cue exactly
     def _filter_spike_dict(spike_dict, time_interval):
-        times      = spike_dict["times"]
-        senders    = spike_dict["senders"]
-        gids       = spike_dict["global_ids"]
+        times = spike_dict["times"]
+        senders = spike_dict["senders"]
+        gids = spike_dict["global_ids"]
         if time_interval is None:
             return spike_dict
         mask = (times >= time_interval[0]) & (times <= time_interval[1])
@@ -603,54 +555,45 @@ def plot_tonotopic_heatmaps(
     else:
         effective_duration = duration_ms * b2.ms
 
-    duration = effective_duration   # this is what gets passed to calculate_firing_rates
+    duration = effective_duration
 
-    cues  = sorted(cue_to_rate.keys())
+    cues = sorted(cue_to_rate.keys())
     sides = ["L", "R"]
 
     # ------------------------------------------------------------------
     # 2.  Tonotopic grid
     # ------------------------------------------------------------------
-    # Number of neurons — read from the first cue/side entry
     num_neurons = len(cue_to_rate[cues[0]]['L'][pop]["global_ids"])
 
-    # Full CF array (Hz, ascending)
-    cf_array = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, num_neurons)   # shape: (num_neurons,)
+    cf_array = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, num_neurons)
 
     num_intervals = math.ceil(num_neurons / num_cells_per_interval)
 
-    # Central CF per interval (for y-axis labels)
     cf_ids = np.zeros(num_intervals)
     for i in range(num_intervals):
-        start_idx  = i * num_cells_per_interval
-        end_idx    = min((i + 1) * num_cells_per_interval, num_neurons)
-        mid_idx    = (start_idx + end_idx - 1) // 2
-        cf_ids[i]  = cf_array[mid_idx] / b2.Hz   # store as plain float (Hz)
+        start_idx = i * num_cells_per_interval
+        end_idx = min((i + 1) * num_cells_per_interval, num_neurons)
+        mid_idx = (start_idx + end_idx - 1) // 2
+        cf_ids[i] = cf_array[mid_idx] / b2.Hz
 
     # ------------------------------------------------------------------
-    # 3.  Compute firing rates using calculate_firing_rates
-    #     We iterate over intervals by passing a cf_interval to the
-    #     shared helper — consistent with draw_rate_vs_cue.
+    # 3.  Firing rates via calculate_firing_rates
     # ------------------------------------------------------------------
     rate_matrices = {side: np.zeros((num_intervals, len(cues))) for side in sides}
 
     for i in range(num_intervals):
         start_idx = i * num_cells_per_interval
-        end_idx   = min((i + 1) * num_cells_per_interval, num_neurons)
-        mid_idx   = (start_idx + end_idx - 1) // 2
+        end_idx = min((i + 1) * num_cells_per_interval, num_neurons)
 
-        # CF boundaries for this interval (Hz, plain floats)
         cf_lo = cf_array[start_idx] / b2.Hz
         cf_hi = cf_array[end_idx - 1] / b2.Hz
 
-        # Tiny guard: avoid a degenerate single-point interval
         if cf_lo == cf_hi:
             half_bin = (cf_array[1] / b2.Hz - cf_array[0] / b2.Hz) * 0.5
             cf_interval_i = [cf_lo - half_bin, cf_hi + half_bin]
         else:
             cf_interval_i = [cf_lo, cf_hi]
 
-        # calculate_firing_rates returns (tot_spikes_dict, avg_rate_dict, n_neurons_dict)
         _, avg_rate, _ = calculate_firing_rates(
             cue_to_rate,
             pop,
@@ -661,35 +604,52 @@ def plot_tonotopic_heatmaps(
         )
 
         for side in sides:
-            rate_matrices[side][i, :] = avg_rate[side]   # shape: (len(cues),)
+            rate_matrices[side][i, :] = avg_rate[side]
 
-    # ------------------------------------------------------------------
-    # 4.  Optional row normalisation
-    # ------------------------------------------------------------------
-    if row_norm:
-        for side in sides:
-            for i in range(num_intervals):
-                row_max = np.max(rate_matrices[side][i, :])
-                if row_max > 0:
-                    rate_matrices[side][i, :] /= row_max
+    return rate_matrices, cf_ids, cues, num_intervals, num_neurons
 
-    # ------------------------------------------------------------------
-    # 5.  Difference matrix (L − R)
-    # ------------------------------------------------------------------
+def _row_normalize(rate_matrices, num_intervals):
+    """Row-normalise each side's matrix in place (each row divided by its own max)."""
+    for side in rate_matrices:
+        for i in range(num_intervals):
+            row_max = np.max(rate_matrices[side][i, :])
+            if row_max > 0:
+                rate_matrices[side][i, :] /= row_max
+    return rate_matrices
+
+def _plot_tonotopic_single(
+    rate_matrices,
+    cf_ids,
+    cues,
+    num_intervals,
+    num_neurons,
+    num_cells_per_interval,
+    title=None,
+    figsize=(8, 6),
+    cmap='viridis',
+    diff_cmap='coolwarm',
+    norm_max_given=None,
+    y_axis='cf',
+    f_ticks=None,
+    show_sides=True,
+    cue_type="angle",
+    row_norm=True,
+):
+    """
+    Steps 5-7 of the original function: build the figure(s) from already-computed
+    (and, if desired, already-normalised) rate matrices.
+    """
     diff_matrix = rate_matrices['L'] - rate_matrices['R']
 
-    # ------------------------------------------------------------------
-    # 6.  Build figure
-    # ------------------------------------------------------------------
     if show_sides:
-        fig, axes = plt.subplots(1, 3, figsize=(figsize[0]*3, figsize[1]))
+        fig, axes = plt.subplots(1, 3, figsize=(figsize[0] * 3, figsize[1]))
 
-        im_left  = axes[0].imshow(rate_matrices['L'], cmap=cmap,
+        im_left = axes[0].imshow(rate_matrices['L'], cmap=cmap,
                                   aspect='auto', interpolation='none')
         im_right = axes[1].imshow(rate_matrices['R'], cmap=cmap,
-                                  aspect='auto', interpolation='none')
+                                   aspect='auto', interpolation='none')
 
-        cbar_left  = plt.colorbar(im_left,  ax=axes[0])
+        cbar_left = plt.colorbar(im_left, ax=axes[0])
         cbar_right = plt.colorbar(im_right, ax=axes[1])
         cbar_label = 'Normalized Firing Rate' if row_norm else 'Firing Rate [Hz]'
         cbar_left.set_label(cbar_label)
@@ -702,20 +662,16 @@ def plot_tonotopic_heatmaps(
     else:
         fig, diff_ax = plt.subplots(1, 1, figsize=figsize)
 
-    # Diverging colour scale, symmetric around zero
     norm_max = max(abs(np.nanmin(diff_matrix)), abs(np.nanmax(diff_matrix)))
     if norm_max_given is not None and norm_max_given >= norm_max:
         norm_max = norm_max_given
     diff_norm = Normalize(vmin=-norm_max, vmax=norm_max)
 
-    im_diff  = diff_ax.imshow(diff_matrix, cmap=diff_cmap, aspect='auto',
+    im_diff = diff_ax.imshow(diff_matrix, cmap=diff_cmap, aspect='auto',
                               interpolation='none', norm=diff_norm)
     cbar_diff = plt.colorbar(im_diff, ax=diff_ax)
     cbar_diff.set_label('Difference (L − R)')
 
-    # ------------------------------------------------------------------
-    # 7.  Axis formatting helper
-    # ------------------------------------------------------------------
     def _format_cf(hz):
         if hz < 1000:
             return f"{int(round(hz))} Hz"
@@ -723,14 +679,13 @@ def plot_tonotopic_heatmaps(
             return f"{hz / 1000:.1f} kHz"
 
     def setup_axis(ax):
-        # --- x-axis ---
         ax.set_xticks(np.arange(len(cues)))
         if cue_type == "angle":
             ax.set_xticklabels([f"{int(c)}°" for c in cues])
             ax.set_xlabel("Azimuth angle [deg]")
         elif cue_type == "itd":
             ax.set_xticklabels([f"{round(c * 1e6)}" for c in cues],
-                               rotation=45, ha='right')
+                                rotation=45, ha='right')
             ax.set_xlabel("ITD [µs]")
         elif cue_type == "ild":
             ax.set_xticklabels([f"{c}" for c in cues])
@@ -739,13 +694,11 @@ def plot_tonotopic_heatmaps(
             ax.set_xticklabels([f"{round(c)}" for c in cues])
             ax.set_xlabel("Contralateral Level [dB]")
 
-        # --- y-axis ---
         if f_ticks is not None and y_axis == 'cf':
             y_positions, y_labels = [], []
 
-            # Fixed edge ticks
-            y_positions.append(-0.5);                  y_labels.append(_format_cf(cf_ids[0]))
-            y_positions.append(num_intervals - 0.5);   y_labels.append(_format_cf(cf_ids[-1]))
+            y_positions.append(-0.5); y_labels.append(_format_cf(cf_ids[0]))
+            y_positions.append(num_intervals - 0.5); y_labels.append(_format_cf(cf_ids[-1]))
 
             for freq in f_ticks:
                 distances = np.abs(cf_ids - freq)
@@ -755,12 +708,11 @@ def plot_tonotopic_heatmaps(
 
             ax.set_yticks(y_positions)
             ax.set_yticklabels(y_labels)
-
         else:
             ax.set_yticks(np.arange(num_intervals))
             if y_axis == 'cf':
                 ax.set_yticklabels([_format_cf(f) for f in cf_ids])
-            else:  # 'cells'
+            else:
                 labels = []
                 for i in range(num_intervals):
                     s = i * num_cells_per_interval
@@ -768,9 +720,8 @@ def plot_tonotopic_heatmaps(
                     labels.append(f"{s}–{e}")
                 ax.set_yticklabels(labels)
 
-        ax.invert_yaxis()   # low-CF (high-index in Greenwood ascending order) at bottom
+        ax.invert_yaxis()
 
-    # Apply to all axes
     if show_sides:
         for ax in axes:
             setup_axis(ax)
@@ -789,6 +740,430 @@ def plot_tonotopic_heatmaps(
         fig.suptitle(title, fontsize=16)
 
     return
+
+def plot_tonotopic_heatmaps(
+    data,
+    pop='LSO',
+    num_cells_per_interval=1000,
+    time_interval=None,
+    row_norm=True,
+    title=None,
+    figsize=(8, 6),
+    cmap='viridis',
+    diff_cmap='coolwarm',
+    norm_max_given=None,
+    y_axis='cf',
+    f_ticks=None,
+    show_sides=True,
+    cue_type="angle",
+    multi_mode="avg",
+):
+    """
+    Generates heatmaps for auditory neural responses across cues and frequency bands.
+
+    Parameters
+    ----------
+    data : dict or list of dict
+        Simulation data dict containing 'cue_to_rate' and either 'simulation_time'
+        or data['sounds']['base_sound'].sound.duration. Can also be a list/tuple of
+        such dicts (e.g. multiple seeds or repeats of the same protocol) — all
+        entries must share the same population, cue set, and tonotopic grid.
+    pop : str, default='LSO'
+        Population name to analyse (e.g. 'LSO', 'MSO').
+    num_cells_per_interval : int, default=1000
+        Number of cells per tonotopic frequency bin.
+    row_norm : bool, default=True
+        If True, normalise each frequency-row by its own maximum firing rate.
+        When multi_mode='avg', normalisation is applied to the *averaged* matrix.
+        When multi_mode='all', normalisation is applied independently to each result.
+    title : str, optional
+        Overall suptitle for the figure (used as a prefix per-result when
+        multi_mode='all').
+    figsize, cmap, diff_cmap, norm_max_given, y_axis, f_ticks, show_sides, cue_type :
+        Same as before — see body for details.
+    multi_mode : {'avg', 'all'}, default='avg'
+        Only relevant when `data` is a list/tuple:
+        'avg' -> average the (unnormalised) rate matrices across all results,
+                 then produce a single heatmap-set figure.
+        'all' -> produce one heatmap-set figure per result in the list.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        When `data` is a single dict, or a list with multi_mode='avg'.
+    figs : list of matplotlib.figure.Figure
+        When `data` is a list with multi_mode='all' (one figure per result).
+    """
+    # ------------------------------------------------------------------
+    # List-of-results handling
+    # ------------------------------------------------------------------
+    if isinstance(data, (list, tuple)):
+        if multi_mode not in ("avg", "all"):
+            raise ValueError("multi_mode must be 'avg' or 'all'")
+
+        if multi_mode == "all":
+            figs = []
+            for idx, single_data in enumerate(data):
+                sub_title = f"{title} — result {idx + 1}" if title else f"Result {idx + 1}"
+                fig = plot_tonotopic_heatmaps(
+                    single_data,
+                    pop=pop,
+                    num_cells_per_interval=num_cells_per_interval,
+                    time_interval=time_interval,
+                    row_norm=row_norm,
+                    title=sub_title,
+                    figsize=figsize,
+                    cmap=cmap,
+                    diff_cmap=diff_cmap,
+                    norm_max_given=norm_max_given,
+                    y_axis=y_axis,
+                    f_ticks=f_ticks,
+                    show_sides=show_sides,
+                    cue_type=cue_type,
+                )
+                figs.append(fig)
+            return figs
+
+        # multi_mode == "avg"
+        all_matrices = []
+        cf_ids_ref, cues_ref, num_intervals_ref, num_neurons_ref = None, None, None, None
+
+        for single_data in data:
+            rate_matrices, cf_ids, cues, num_intervals, num_neurons = _compute_rate_matrices(
+                single_data, pop, num_cells_per_interval, time_interval
+            )
+            if cf_ids_ref is None:
+                cf_ids_ref, cues_ref = cf_ids, cues
+                num_intervals_ref, num_neurons_ref = num_intervals, num_neurons
+            elif rate_matrices['L'].shape != (num_intervals_ref, len(cues_ref)):
+                raise ValueError(
+                    "All results must share the same tonotopic grid and cue set "
+                    "to be averaged together."
+                )
+            all_matrices.append(rate_matrices)
+
+        avg_matrices = {
+            side: np.mean(np.stack([m[side] for m in all_matrices], axis=0), axis=0)
+            for side in ['L', 'R']
+        }
+        if row_norm:
+            avg_matrices = _row_normalize(avg_matrices, num_intervals_ref)
+
+        return _plot_tonotopic_single(
+            avg_matrices,
+            cf_ids_ref,
+            cues_ref,
+            num_intervals_ref,
+            num_neurons_ref,
+            num_cells_per_interval,
+            title=title,
+            figsize=figsize,
+            cmap=cmap,
+            diff_cmap=diff_cmap,
+            norm_max_given=norm_max_given,
+            y_axis=y_axis,
+            f_ticks=f_ticks,
+            show_sides=show_sides,
+            cue_type=cue_type,
+            row_norm=row_norm,
+        )
+
+    # ------------------------------------------------------------------
+    # Single-result path (original behaviour, unchanged)
+    # ------------------------------------------------------------------
+    rate_matrices, cf_ids, cues, num_intervals, num_neurons = _compute_rate_matrices(
+        data, pop, num_cells_per_interval, time_interval
+    )
+    if row_norm:
+        rate_matrices = _row_normalize(rate_matrices, num_intervals)
+
+    return _plot_tonotopic_single(
+        rate_matrices,
+        cf_ids,
+        cues,
+        num_intervals,
+        num_neurons,
+        num_cells_per_interval,
+        title=title,
+        figsize=figsize,
+        cmap=cmap,
+        diff_cmap=diff_cmap,
+        norm_max_given=norm_max_given,
+        y_axis=y_axis,
+        f_ticks=f_ticks,
+        show_sides=show_sides,
+        cue_type=cue_type,
+        row_norm=row_norm,
+    )
+
+def compute_hwhm_tonotopic(rate_matrix, cf_ids, num_cells_per_interval,
+                            cue_idx, rel_height=0.5):
+    """
+    Computes the HWHM-based active rows for a single column (cue) of the
+    rate matrix.
+
+    Parameters
+    ----------
+    rate_matrix : np.ndarray, shape (num_intervals, num_cues)
+        Rate matrix for one side (L or R), already row-normalised or raw.
+    cf_ids : np.ndarray, shape (num_intervals,)
+        Characteristic frequency for each tonotopic row (Hz).
+    num_cells_per_interval : int
+        Number of neurons per CF bin.
+    cue_idx : int
+        Column index of the cue to analyse.
+    rel_height : float, default=0.5
+        Fraction of peak at which to measure the width (0.5 = half-maximum).
+
+    Returns
+    -------
+    dict with keys:
+        profile       : 1D array of firing rates for this cue column
+        peak_row      : row index of the maximum
+        peak_cf       : CF (Hz) at the peak
+        peak_rate     : firing rate at the peak
+        half_max      : threshold used (rel_height × peak_rate)
+        left_row      : leftmost row still above half_max
+        right_row     : rightmost row still above half_max
+        active_rows   : np.arange(left_row, right_row + 1)
+        active_cfs    : cf_ids[active_rows]
+        n_active_rows : number of active rows
+        n_neurons     : n_active_rows × num_cells_per_interval
+        width_octaves : log2(active_cfs[-1] / active_cfs[0]), or 0 if single row
+    """
+    profile = rate_matrix[:, cue_idx].copy()
+
+    if profile.max() == 0:
+        return None  # silent column
+
+    peak_row = int(np.argmax(profile))
+    peak_rate = profile[peak_row]
+    half_max = rel_height * peak_rate
+
+    # Walk left from peak
+    left = peak_row
+    while left > 0 and profile[left - 1] >= half_max:
+        left -= 1
+
+    # Walk right from peak
+    right = peak_row
+    while right < len(profile) - 1 and profile[right + 1] >= half_max:
+        right += 1
+
+    active_rows = np.arange(left, right + 1)
+    active_cfs = cf_ids[active_rows]
+    width_oct = np.log2(active_cfs[-1] / active_cfs[0]) if len(active_cfs) > 1 else 0.0
+
+    return {
+        'profile':       profile,
+        'peak_row':      peak_row,
+        'peak_cf':       cf_ids[peak_row],
+        'peak_rate':     peak_rate,
+        'half_max':      half_max,
+        'left_row':      left,
+        'right_row':     right,
+        'active_rows':   active_rows,
+        'active_cfs':    active_cfs,
+        'n_active_rows': len(active_rows),
+        'n_neurons':     len(active_rows) * num_cells_per_interval,
+        'width_octaves': width_oct,
+    }
+
+def plot_tonotopic_profile_hwhm(
+    data,
+    pop='LSO',
+    num_cells_per_interval=1000,
+    time_interval=None,
+    cue=None,
+    cue_idx=None,
+    sides=('L', 'R'),
+    rel_height=0.5,
+    y_axis='cf',
+    figsize=(7, 5),
+    # rest unchanged
+    color_profile='steelblue',
+    color_active='tomato',
+    color_hwhm='orange',
+    title=None
+    ):
+
+    rate_matrices, cf_ids, cues, num_intervals, num_neurons = _compute_rate_matrices(
+        data, pop, num_cells_per_interval, time_interval)
+    """
+    Plots the tonotopic firing-rate profile for a chosen cue column and
+    overlays the HWHM active region.
+
+    Parameters
+    ----------
+    rate_matrices : dict {'L': ndarray, 'R': ndarray}
+        Rate matrices, shape (num_intervals, num_cues) each.
+    cf_ids : np.ndarray
+        CF per tonotopic row (Hz).
+    cues : array-like
+        Cue values (e.g. ILD in dB, ITD in µs, angle in °).
+        Used to select by value and for labelling.
+    num_cells_per_interval : int
+    cue : scalar, optional
+        Cue value to select. Nearest match in `cues` is used.
+        Provide either `cue` or `cue_idx`, not both.
+    cue_idx : int, optional
+        Direct column index into the rate matrix.
+    sides : tuple of str
+        Which sides to plot, e.g. ('L',), ('R',), or ('L', 'R').
+    rel_height : float
+        Fraction of peak for HWHM (default 0.5).
+    y_axis : {'cf', 'row'}
+        Whether to label the y-axis in Hz or row index.
+    figsize : tuple
+    color_profile, color_active, color_hwhm : str
+        Colors for the full profile, the active-band fill, and the HWHM line.
+    title : str, optional
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    results : dict
+        HWHM result dict keyed by side.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as ticker
+
+    # ---- resolve cue index ------------------------------------------------
+    if cue_idx is not None and cue is not None:
+        raise ValueError("Provide either `cue` or `cue_idx`, not both.")
+    if cue is not None:
+        cues_arr = np.asarray(cues)
+        cue_idx = int(np.argmin(np.abs(cues_arr - cue)))
+        cue_label = f"{cues_arr[cue_idx]}"
+    elif cue_idx is not None:
+        cue_label = f"{cues[cue_idx]}"
+    else:
+        raise ValueError("Provide either `cue` or `cue_idx`.")
+
+    # ---- y-axis values ----------------------------------------------------
+    if y_axis == 'cf':
+        y_vals = cf_ids.astype(float)
+        ylabel = 'CF (Hz)'
+    else:
+        y_vals = np.arange(len(cf_ids), dtype=float)
+        ylabel = 'Row index'
+
+    n_sides = len(sides)
+    fig, axes = plt.subplots(1, n_sides, figsize=(figsize[0] * n_sides, figsize[1]),
+                             sharey=True, sharex=True, squeeze=False)
+
+    results = {}
+    for ax, side in zip(axes[0], sides):
+        res = compute_hwhm_tonotopic(
+            rate_matrices[side], cf_ids, num_cells_per_interval,
+            cue_idx=cue_idx, rel_height=rel_height
+        )
+        results[side] = res
+
+        if res is None:
+            ax.set_title(f"Side {side} — silent")
+            continue
+
+        profile = res['profile']
+
+        # Full profile
+        ax.plot(profile, y_vals, color=color_profile, lw=1.8, label='Profile')
+
+        # Active band fill
+        ax.fill_betweenx(
+            y_vals[res['active_rows']],
+            0,
+            profile[res['active_rows']],
+            color=color_active, alpha=0.35, label=f'Active ({res["n_active_rows"]} rows)'
+        )
+
+        # Half-maximum horizontal line
+        ax.axvline(res['half_max'], color=color_hwhm, lw=1.2, ls='--',
+                   label=f'Half-max ({res["half_max"]:.2f})')
+
+        # Peak marker
+        ax.scatter([res['peak_rate']], [y_vals[res['peak_row']]],
+                   color='black', zorder=5, s=40, label=f'Peak CF: {res["peak_cf"]:.0f} Hz')
+
+        # Bracket lines at left/right boundary
+        for boundary in (res['left_row'], res['right_row']):
+            ax.axhline(y_vals[boundary], color=color_active, lw=0.9, ls=':')
+
+        # Annotation box
+        info = (
+            f"Neurons: {res['n_neurons']}\n"
+            f"Width: {res['width_octaves']:.2f} oct"
+        )
+        ax.text(0.97, 0.97, info, transform=ax.transAxes,
+                va='top', ha='right', fontsize=8,
+                bbox=dict(boxstyle='round,pad=0.4', fc='white', alpha=0.8))
+
+        ax.set_xlabel('Firing rate (sp/s)')
+        ax.set_title(f'Side {side}')
+        ax.legend(fontsize=8, loc='lower right')
+
+        if y_axis == 'cf':
+            ax.set_yscale('log')
+            ax.yaxis.set_major_formatter(
+                ticker.FuncFormatter(lambda v, _: f'{v:.0f}')
+            )
+
+    axes[0][0].set_ylabel(ylabel)
+
+    suptitle = title or f'Tonotopic profile — cue = {cue_label}'
+    fig.suptitle(suptitle, fontsize=11, y=1.01)
+    fig.tight_layout()
+
+    return fig, results
+
+def select_active_band(
+    results,           # list of subjects, each a list of seed dicts
+    pop='LSO',
+    num_cells_per_interval=160,
+    time_interval=None,
+    rel_height=0.5,
+):
+    """
+    Selects the tonotopic band that maximizes total activity pooled
+    across all cues, both sides (L+R), and all subjects/seeds.
+
+    Returns
+    -------
+    center_cf : float   — CF (Hz) at the peak of the pooled profile
+    bw_neurons : int    — half-width in neuron rows (for use in center_cf+bw_neurons mode)
+    result : dict       — full compute_hwhm_tonotopic output on the pooled profile
+    """
+    pooled_profile = None
+    cf_ids_ref = None
+
+    for subj_data in results:          # iterate subjects
+        for d in subj_data:            # iterate seeds
+            rate_matrices, cf_ids, cues, num_intervals, num_neurons = \
+                _compute_rate_matrices(d, pop, num_cells_per_interval, time_interval)
+
+            if cf_ids_ref is None:
+                cf_ids_ref = cf_ids
+                pooled_profile = np.zeros(len(cf_ids))
+
+            # sum over both sides and all cues
+            for side in ('L', 'R'):
+                pooled_profile += rate_matrices[side].sum(axis=1)  # sum over cues
+
+    # find the active band on the pooled profile
+    pooled_matrix = pooled_profile[:, np.newaxis]
+    result = compute_hwhm_tonotopic(
+        pooled_matrix, cf_ids_ref, num_cells_per_interval,
+        cue_idx=0, rel_height=rel_height
+    )
+
+    center_cf  = result['peak_cf']
+    bw_neurons = result['n_active_rows']* num_cells_per_interval // 2  # half-width for center_cf±bw mode
+
+    print(f"[select_active_band] peak_cf={center_cf:.0f} Hz, "
+          f"band=[{result['active_cfs'][0]:.0f}, {result['active_cfs'][-1]:.0f}] Hz, "
+          f"n_active_rows={result['n_active_rows']}, bw_neurons={bw_neurons}")
+
+    return center_cf, bw_neurons, result
 
 def plot_rasterplot(
     spikes_series,
@@ -1075,6 +1450,7 @@ def draw_spikes_and_psth_bothside(
     res,
     cue,
     pop,
+    side=None,  # None = both sides, 'L' or 'R' = single side only
     y_ax='cf_custom',
     f_ticks=[125, 1000, 10000],
     title=None,
@@ -1086,23 +1462,31 @@ def draw_spikes_and_psth_bothside(
     hist_rate=False,
     cf_bin_size=3,
     raster_dot_size=1,
-    figsize=(14, 18)
+    figsize=None,
+    colors = None
 ):
+    if colors == None:
+        side_colors = {'L': 'm', 'R': 'g'}
+    else:
+        side_colors = {'L': colors[0], 'R': colors[1]}
 
-    side_colors = {'L': 'm', 'R': 'g'}
+    if side is not None and side not in side_colors:
+        raise ValueError(f"side must be None, 'L', or 'R' — got {side!r}")
+    sides_to_plot = list(side_colors.keys()) if side is None else [side]
+    single_side = side is not None
+
+    if figsize is None:
+        figsize = (14, 18) if not single_side else (14, 10)
 
     duration = res.get("simulation_time", res["sounds"]["base_sound"].sound.duration / b2.ms)
     if xlim is None:
         xlim = [0, duration]
 
     # ------------------------------------------------------------------
-    # Resolve ylim — mirrors draw_rate_vs_cue logic exactly:
-    #   1. center_cf + bw_neurons  → derive cf_interval from neuron indices
-    #   2. cf_interval             → use directly as [ylim_min, ylim_max]
-    #   3. neither                 → full frequency range
+    # Resolve ylim — mirrors draw_rate_vs_cue logic exactly
     # ------------------------------------------------------------------
     if center_cf is not None and bw_neurons is not None:
-        _n_tmp = len(res["cue_to_rate"][cue]["L"][pop]["global_ids"])
+        _n_tmp = len(res["cue_to_rate"][cue][sides_to_plot[0]][pop]["global_ids"])
         _cf_tmp = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n_tmp) / b2.Hz
         _, center_idx = take_closest(_cf_tmp, center_cf)
         low_idx  = max(0, center_idx - bw_neurons)
@@ -1114,46 +1498,63 @@ def draw_spikes_and_psth_bothside(
             f"ylim=[{ylim[0]:.1f}, {ylim[1]:.1f}] Hz"
         )
     elif cf_interval is not None:
-        ylim = list(cf_interval)          # [cf_min, cf_max] passed directly
+        ylim = list(cf_interval)
     else:
-        ylim = [CFMIN / Hz, CFMAX / Hz]  
+        ylim = [CFMIN / Hz, CFMAX / Hz]
 
-    L_hrtf_sound = res["sounds"]["left_sounds"][cue]
-    R_hrtf_sound = res["sounds"]["right_sounds"][cue]
+    hrtf_sound = {
+        "L": res["sounds"]["left_sounds"][cue],
+        "R": res["sounds"]["right_sounds"][cue],
+    }
 
     # -----------------------------------------------------------------------
-    # 5-row LAYOUT
+    # LAYOUT — 5 rows for both sides, 3 rows for a single side
     # -----------------------------------------------------------------------
     fig = plt.figure(figsize=figsize)
-    gs = GridSpec(
-        5, 2, figure=fig,
-        width_ratios=[5, 1.5],
-        height_ratios=[0.15, 1, 0.15, 1, 0.8],
-        hspace=0.35,
-        wspace=0.05,
-    )
 
-    ax_sound0 = fig.add_subplot(gs[0, 0])
-    t0 = np.arange(len(R_hrtf_sound)) / R_hrtf_sound.samplerate * 1000
-    ax_sound0.plot(t0, R_hrtf_sound, color='g', lw=2)
-    ax_sound0.set_ylabel("R sound")
-    ax_sound0.set_xlim(xlim)
-    ax_sound0.grid(True, alpha=0.3)
+    if not single_side:
+        gs = GridSpec(
+            5, 2, figure=fig,
+            width_ratios=[5, 1.5],
+            height_ratios=[0.15, 1, 0.15, 1, 0.8],
+            hspace=0.35, wspace=0.05,
+        )
+        sound_row = {"L": 2, "R": 0}
+        raster_row = {"L": 3, "R": 1}
+        psth_row = 4
+    else:
+        gs = GridSpec(
+            3, 2, figure=fig,
+            width_ratios=[5, 1.5],
+            height_ratios=[0.15, 1, 0.8],
+            hspace=0.35, wspace=0.05,
+        )
+        sound_row = {sides_to_plot[0]: 0}
+        raster_row = {sides_to_plot[0]: 1}
+        psth_row = 2
 
-    ax_raster_R = fig.add_subplot(gs[1, 0])
-    ax_hist_R   = fig.add_subplot(gs[1, 1], sharey=ax_raster_R)
+    ax_sound = {}
+    ax_raster = {}
+    ax_hist = {}
+    ax_psth_ref = None
 
-    ax_sound2 = fig.add_subplot(gs[2, 0])
-    t2 = np.arange(len(L_hrtf_sound)) / L_hrtf_sound.samplerate * 1000
-    ax_sound2.plot(t2, L_hrtf_sound, color='m', lw=2)
-    ax_sound2.set_ylabel("L sound")
-    ax_sound2.set_xlim(xlim)
-    ax_sound2.grid(True, alpha=0.3)
+    for s in sides_to_plot:
+        ax_sound[s] = fig.add_subplot(gs[sound_row[s], 0])
+        t = np.arange(len(hrtf_sound[s])) / hrtf_sound[s].samplerate * 1000
+        ax_sound[s].plot(t, hrtf_sound[s], color=side_colors[s], lw=2)
+        ax_sound[s].set_ylabel(f"{s} sound")
+        ax_sound[s].set_xlim(xlim)
+        ax_sound[s].grid(True, alpha=0.3)
 
-    ax_raster_L = fig.add_subplot(gs[3, 0])
-    ax_hist_L   = fig.add_subplot(gs[3, 1], sharey=ax_raster_L)
+        ax_raster[s] = fig.add_subplot(
+            gs[raster_row[s], 0],
+            sharex=ax_psth_ref if ax_psth_ref is not None else None,
+        )
+        ax_hist[s] = fig.add_subplot(gs[raster_row[s], 1], sharey=ax_raster[s])
+        if ax_psth_ref is None:
+            ax_psth_ref = ax_raster[s]
 
-    ax_psth     = fig.add_subplot(gs[4, 0], sharex=ax_raster_L)
+    ax_psth = fig.add_subplot(gs[psth_row, 0], sharex=ax_psth_ref)
 
     # ===========================================================
     # Helper: Filter spikes
@@ -1242,11 +1643,9 @@ def draw_spikes_and_psth_bothside(
     # ===========================================================
     # RASTERS + HISTOGRAMS
     # ===========================================================
-    for side, ax_raster, ax_hist in [
-        ("L", ax_raster_L, ax_hist_L),
-        ("R", ax_raster_R, ax_hist_R),
-    ]:
-        spikes = res["cue_to_rate"][cue][side][pop]
+    hist_xlims = []
+    for s in sides_to_plot:
+        spikes = res["cue_to_rate"][cue][s][pop]
 
         times_f, senders_f, cf_full, ymin_idx, ymax_idx, gids = \
             filter_spikes(spikes, xlim, ylim)
@@ -1254,67 +1653,52 @@ def draw_spikes_and_psth_bothside(
         n_neurons = len(gids)
         local_ids_f = senders_f - gids[0]
 
-        # RASTER Y-axis
         y_values = setup_raster_yaxis(
-            ax=ax_raster,
-            y_ax=y_ax,
-            senders_f=senders_f,
-            local_ids_f=local_ids_f,
-            cf_full=cf_full,
-            gids=gids,
-            ylim=ylim,
-            ymin_idx=ymin_idx,
-            ymax_idx=ymax_idx,
-            pop=pop
+            ax=ax_raster[s], y_ax=y_ax, senders_f=senders_f,
+            local_ids_f=local_ids_f, cf_full=cf_full, gids=gids,
+            ylim=ylim, ymin_idx=ymin_idx, ymax_idx=ymax_idx, pop=pop
         )
 
-        ax_raster.plot(times_f, y_values, '.', color=side_colors[side], markersize=raster_dot_size)
-        ax_raster.set_xlim(xlim)
-        ax_raster.text(0.0, 1.05, f"{side} side",
-                       transform=ax_raster.transAxes,
+        ax_raster[s].plot(times_f, y_values, '.', color=side_colors[s], markersize=raster_dot_size)
+        ax_raster[s].set_xlim(xlim)
+        ax_raster[s].text(0.0, 1.05, f"{s} side",
+                       transform=ax_raster[s].transAxes,
                        fontsize=12, fontweight='bold',
-                       color=side_colors[side])
+                       color=side_colors[s])
 
-        # POPULATION HISTOGRAM
         grouped_y, grouped_counts, bar_height = compute_population_histogram(
-            y_ax=y_ax,
-            local_ids_f=local_ids_f,
-            cf_full=cf_full,
-            n_neurons=n_neurons,
-            ymin_idx=ymin_idx,
-            ymax_idx=ymax_idx,
-            gids=gids,
-            ylim=ylim,
-            cf_bin_size=cf_bin_size
+            y_ax=y_ax, local_ids_f=local_ids_f, cf_full=cf_full,
+            n_neurons=n_neurons, ymin_idx=ymin_idx, ymax_idx=ymax_idx,
+            gids=gids, ylim=ylim, cf_bin_size=cf_bin_size
         )
 
         if hist_rate:
             grouped_values = (grouped_counts / xlim[1]) * 1000.0 / cf_bin_size
-            avg_value = grouped_values.mean()
-            #print(f"Avg firing rate ({side} side): {avg_value:.2f} Hz POP")
             xlabel = "Avg Firing rate [Hz]"
         else:
             grouped_values = grouped_counts
-            avg_value = grouped_values.mean()
             xlabel = "Spike count"
+        avg_value = grouped_values.mean()
 
-        ax_hist.barh(grouped_y, grouped_values, height=bar_height,
-                     color=side_colors[side], alpha=0.4)
-        ax_hist.axvline(avg_value, linestyle='--', linewidth=2,
-                color=side_colors[side], alpha=0.9)
-        ax_hist.set_ylim(ax_raster.get_ylim())
-        ax_hist.set_xlabel(xlabel)
-        ax_hist.tick_params(axis='y', labelleft=False)
-        x_max = max(ax_hist_L.get_xlim()[1], ax_hist_R.get_xlim()[1])
-        ax_hist_L.set_xlim(0, x_max)
-        ax_hist_R.set_xlim(0, x_max)
+        ax_hist[s].barh(grouped_y, grouped_values, height=bar_height,
+                     color=side_colors[s], alpha=0.4)
+        ax_hist[s].axvline(avg_value, linestyle='--', linewidth=2,
+                color=side_colors[s], alpha=0.9)
+        ax_hist[s].set_ylim(ax_raster[s].get_ylim())
+        ax_hist[s].set_xlabel(xlabel)
+        ax_hist[s].tick_params(axis='y', labelleft=False)
+        hist_xlims.append(ax_hist[s].get_xlim()[1])
+
+    x_max = max(hist_xlims)
+    for s in sides_to_plot:
+        ax_hist[s].set_xlim(0, x_max)
 
     # ===========================================================
     # PSTH
     # ===========================================================
-    for side in ["L", "R"]:
-        color = side_colors[side]
-        spikes = res["cue_to_rate"][cue][side][pop]
+    for s in sides_to_plot:
+        color = side_colors[s]
+        spikes = res["cue_to_rate"][cue][s][pop]
 
         times_f, _, _, ymin_idx, ymax_idx, _ = filter_spikes(spikes, xlim, ylim)
 
@@ -1324,11 +1708,11 @@ def draw_spikes_and_psth_bothside(
         if hist_rate:
             rates = (counts * 1000.0) / (psth_bin_size * (ymax_idx - ymin_idx + 1))
             avg_value = rates.mean()
-            print(f"Avg firing rate ({side} side): {avg_value:.2f} Hz")
-            ax_psth.plot(bins[:-1], rates, color=color, alpha=0.7, label=side)
-            ax_psth.axhline(avg_value, linestyle='--', linewidth=2, color=side_colors[side], alpha=0.9)
+            print(f"Avg firing rate ({s} side): {avg_value:.2f} Hz")
+            ax_psth.plot(bins[:-1], rates, color=color, alpha=0.7, label=s)
+            ax_psth.axhline(avg_value, linestyle='--', linewidth=2, color=color, alpha=0.9)
         else:
-            ax_psth.hist(times_f, bins=bins, alpha=0.4, color=color, label=side)
+            ax_psth.hist(times_f, bins=bins, alpha=0.4, color=color, label=s)
 
     ax_psth.set_xlabel("Time [ms]")
     ax_psth.set_ylabel("Avg Firing rate [Hz]" if hist_rate else "Spike count")
@@ -1336,7 +1720,7 @@ def draw_spikes_and_psth_bothside(
 
     if title:
         fig.suptitle(title, fontsize=14, fontweight='bold')
-
+        
 def draw_rate_vs_cue(
     data,
     pop='LSO',
@@ -1548,7 +1932,7 @@ def draw_rate_vs_cue(
                 {s: np.array(err_count[s]) / n_neurons for s in sides_local}
                 if err_count is not None else None
             )
-            ylabel_text = "Spikes / Neuron"
+            ylabel_text = "Spikes / Rep"
 
         elif rate == 'mm_norm':
             plotted_rate, _ = normalize_rates(mean_avg, sides_local)
@@ -1567,18 +1951,81 @@ def draw_rate_vs_cue(
         # Plot — unchanged from your original
         # ------------------------------------------------------------------
 
+        # for side in sides_local:
+        #     mean_curve = plotted_rate[side]
+        #     ax.plot(
+        #         cues, mean_curve, "o-",
+        #         color=side_colors.get(side, "k"),
+        #         label=label if label else side,
+        #     )
+        #     if multi_mode and plotted_err is not None:
+        #         err_curve = plotted_err[side]
+        #         if shaded:
+        #             ax.fill_between(
+        #                 cues,
+        #                 mean_curve - err_curve,
+        #                 mean_curve + err_curve,
+        #                 alpha=0.25,
+        #                 color=side_colors.get(side, "k"),
+        #                 linewidth=0,
+        #                 label=f"±{error.upper()}",
+        #             )
+        #         else:
+        #             ax.errorbar(
+        #                 cues, mean_curve, yerr=err_curve,
+        #                 fmt="none", capsize=3,
+        #                 color=side_colors.get(side, "k"),
+        #             )
+        # ------------------------------------------------------------------
+        # Plot with xlim filtering (only plot cues inside range)
+        # ------------------------------------------------------------------
+
         for side in sides_local:
-            mean_curve = plotted_rate[side]
+
+            mean_curve = np.asarray(plotted_rate[side])
+            cues_plot = np.asarray(cues)
+
+            # Store mask for error curves
+            mask = np.ones(len(cues_plot), dtype=bool)
+
+            if xlim is not None:
+
+                if cue_type == "itd":
+                    # cues are seconds, xlim is given in µs
+                    xlim_data = np.array(xlim) / 1e6
+                else:
+                    xlim_data = np.array(xlim)
+
+                mask = (
+                    (cues_plot >= xlim_data[0]) &
+                    (cues_plot <= xlim_data[1])
+                )
+
+                cues_plot = cues_plot[mask]
+                mean_curve = mean_curve[mask]
+
+
             ax.plot(
-                cues, mean_curve, "o-",
+                cues_plot,
+                mean_curve,
+                "o-",
                 color=side_colors.get(side, "k"),
                 label=label if label else side,
             )
+
+
             if multi_mode and plotted_err is not None:
-                err_curve = plotted_err[side]
+
+                err_curve = np.asarray(plotted_err[side])
+
+                if xlim is not None:
+                    err_curve = err_curve[mask]
+
+
                 if shaded:
+
                     ax.fill_between(
-                        cues,
+                        cues_plot,
                         mean_curve - err_curve,
                         mean_curve + err_curve,
                         alpha=0.25,
@@ -1586,12 +2033,17 @@ def draw_rate_vs_cue(
                         linewidth=0,
                         label=f"±{error.upper()}",
                     )
+
                 else:
+
                     ax.errorbar(
-                        cues, mean_curve, yerr=err_curve,
-                        fmt="none", capsize=3,
+                        cues_plot,
+                        mean_curve,
+                        yerr=err_curve,
+                        fmt="none",
+                        capsize=3,
                         color=side_colors.get(side, "k"),
-                    )
+            )
         if label is None:
             ax.legend()
 
@@ -1614,25 +2066,26 @@ def draw_rate_vs_cue(
                 ax.set_xlim(xlim)
 
         elif cue_type == "itd":
-            if xlim:
-                xlim_s = [xlim[0]/1e6, xlim[1]/1e6]
-                ax.set_xlim(xlim_s)
-                visible_cues = [c for c in cues if xlim_s[0] <= c <= xlim_s[1]]
-            else:
-                visible_cues = cues
+            # if xlim:
+            #     # xlim_s = [xlim[0]/1e6, xlim[1]/1e6]
+            #     # ax.set_xlim(xlim_s)
+            #     visible_cues = [c for c in cues if xlim_s[0] <= c <= xlim_s[1]]
+            # else:
+            #     visible_cues = cues
 
-            max_ticks = 8
-            if len(visible_cues) > max_ticks:
-                visible_cues = np.concatenate([np.linspace(-0.005, -0.001,  4, endpoint=False),np.linspace(-0.001,  0.001, 5),np.linspace(0.001,  0.005,  5)[1:]])
+            # max_ticks = 8
+            # if len(visible_cues) > max_ticks:
+            #     visible_cues = np.concatenate([np.linspace(-0.005, -0.001,  4, endpoint=False),np.linspace(-0.001,  0.001, 5),np.linspace(0.001,  0.005,  5)[1:]])
 
-            ax.set_xticks(visible_cues)
+            ax.set_xticks(cues_plot)
             ax.set_xticklabels(
-                [f"{round(c * 1e6)}" for c in visible_cues],
+                [f"{round(c * 1e6)}" for c in cues_plot],
                 rotation=45,
                 ha='right'
             )
             ax.set_xlabel("ITD [µs]")
-            ax.axvline(0, color = 'k', linewidth = 0.5)
+            if pop == 'MSO':
+                ax.axvline(0, color = 'k', linewidth = 0.5)
 
         elif cue_type == "ild":
             visible_cues = cues
@@ -1704,9 +2157,9 @@ def draw_rate_vs_cue(
             _n_tmp     = len(cue_to_rate[_first_cue]["L"][pop_name]["global_ids"])
             filter_parts.append(f"CF=full ({_n_tmp} neurons)")
 
-        ax.set_title(
-            base_title + ("  |  " + ", ".join(filter_parts) if filter_parts else "")
-        )
+        # ax.set_title(
+        #     base_title + ("  |  " + ", ".join(filter_parts) if filter_parts else "")
+        # )
 
     # ---- SINGLE POP ----
     if isinstance(pop, str) and pop != "all":
@@ -1742,15 +2195,15 @@ def draw_rate_vs_cue(
     return axes
 
 def draw_rate_vs_cue_multidata(
-    data_list,          # list of: single result dict OR list of result dicts
+    data_list,
     pop='LSO',
-    rate='avg',         # same valid set as draw_rate_vs_cue
+    rate='avg',
     cf_interval=None,
     time_interval=None,
-    target_cf_hz=None,  # scalar OR list/array with one value per group in data_list
+    target_cf_hz=None,
     center_cf=None,
     bw_neurons=None,
-    side='L',
+    side='L',             # 'L', 'R', or 'both'
     colors=None,
     labels=None,
     figsize=(7, 4),
@@ -1762,40 +2215,35 @@ def draw_rate_vs_cue_multidata(
     xlim=None,
     alpha=0.8,
     lw=1.5,
-    ipsi_level = None
+    ipsi_level=None
 ):
     """
     Plot cue vs firing rate comparing groups of datasets.
 
-    data_list : list of (single result dict OR list of result dicts)
-        Each entry is one group. If an entry is a list of dicts, the group
-        is averaged (mean ± SEM/STD shading). If a single dict, no shading.
-    pop : str
-        Population name (e.g. 'LSO', 'MSO').
-    rate : str
-        One of {'avg', 'pop', 'spk', 'spk_pn', 'mm_norm', 'max_norm'}.
     side : str
-        'L' or 'R'.
-    colors : list of str, optional
-        One color per group. Defaults to tab10 cycle.
-    labels : list of str, optional
-        One label per group. Defaults to 'group 0', 'group 1', ...
-    target_cf_hz : float OR list/array, optional
-        If a single float, the same target CF is applied to every group
-        (same behavior as before). If a list/array, it must have the same
-        length as data_list — element i gives the target CF (Hz) for
-        group i, so each group can be evaluated at its own single
-        characteristic-frequency neuron.
-    error : str
-        'sem' or 'std' — controls error band when group has multiple runs.
-    shaded : bool
-        True → fill_between; False → errorbar caps.
-    All other CF selection, time_interval, cue_type, xlim params work
-    identically to draw_rate_vs_cue.
+        'L', 'R', or 'both'. When 'both', L curves are plotted in shades of
+        dark magenta and R curves in shades of dark green. The `colors`
+        parameter is ignored in 'both' mode.
     """
+
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.size": 14,
+        "axes.linewidth": 0.8,
+        "xtick.direction": "in",
+        "ytick.direction": "in",
+        "xtick.major.size": 4,
+        "ytick.major.size": 4,
+        "legend.frameon": False,
+    })
+
     VALID_RATES = {'avg', 'pop', 'spk', 'spk_pn', 'mm_norm', 'max_norm'}
     if rate not in VALID_RATES:
         raise ValueError(f"rate must be one of {VALID_RATES}, got {rate!r}")
+
+    VALID_SIDES = {'L', 'R', 'both'}
+    if side not in VALID_SIDES:
+        raise ValueError(f"side must be one of {VALID_SIDES}, got {side!r}")
 
     # ------------------------------------------------------------------
     # Normalize: each entry may be a single dict or a list of dicts
@@ -1809,18 +2257,48 @@ def draw_rate_vs_cue_multidata(
     n_groups = len(groups)
 
     # ------------------------------------------------------------------
-    # Colors and labels
+    # Determine which sides to plot and build per-curve color/label lists
     # ------------------------------------------------------------------
-    if colors is None:
-        cmap   = plt.get_cmap("tab10")
-        colors = [cmap(i % 10) for i in range(n_groups)]
-    if labels is None:
-        labels = [f"group {i}" for i in range(n_groups)]
+    plot_both = (side == 'both')
+
+    if plot_both:
+        sides_to_plot = ['L', 'R']
+
+        # Shades of dark magenta for L (light→dark as group index increases)
+        magenta_shades = [
+            plt.matplotlib.colors.to_rgba(c)
+            for c in _make_shades('#c2185b', '#ff80ab', n_groups)  # dark→light range
+        ]
+        # Shades of dark green for R
+        green_shades = [
+            plt.matplotlib.colors.to_rgba(c)
+            for c in _make_shades('#1b5e20', '#69f0ae', n_groups)
+        ]
+        side_colors = {'L': magenta_shades, 'R': green_shades}
+
+        if labels is None:
+            base_labels = [f"group {i}" for i in range(n_groups)]
+        else:
+            base_labels = list(labels)
+
+        # Build flat list of (side, group_idx, color, label) tuples
+        curve_specs = []
+        for s in sides_to_plot:
+            for gi in range(n_groups):
+                curve_specs.append((s, gi, side_colors[s][gi], f"{base_labels[gi]} ({s})"))
+    else:
+        sides_to_plot = [side]
+
+        if colors is None:
+            cmap   = plt.get_cmap("tab10")
+            colors = [cmap(i % 10) for i in range(n_groups)]
+        if labels is None:
+            labels = [f"group {i}" for i in range(n_groups)]
+
+        curve_specs = [(side, gi, colors[gi], labels[gi]) for gi in range(n_groups)]
 
     # ------------------------------------------------------------------
-    # Normalize target_cf_hz into a per-group list.
-    # Scalar (or None) → broadcast to every group (old behavior).
-    # list/array → must match n_groups, one target CF per group.
+    # Normalize target_cf_hz into a per-group list
     # ------------------------------------------------------------------
     if target_cf_hz is None or np.isscalar(target_cf_hz):
         target_cf_hz_list = [target_cf_hz] * n_groups
@@ -1831,11 +2309,9 @@ def draw_rate_vs_cue_multidata(
                 f"target_cf_hz list must have the same length as data_list "
                 f"({n_groups} groups), got {len(target_cf_hz_list)}."
             )
-        
+
     # ------------------------------------------------------------------
-    # Normalize center_cf into a per-group list.
-    # Scalar (or None) → broadcast to every group (old behavior).
-    # list/array → must match n_groups, one center CF per group.
+    # Normalize center_cf into a per-group list
     # ------------------------------------------------------------------
     if center_cf is None or np.isscalar(center_cf):
         center_cf_list = [center_cf] * n_groups
@@ -1863,35 +2339,35 @@ def draw_rate_vs_cue_multidata(
     # Figure
     # ------------------------------------------------------------------
     fig, ax = plt.subplots(figsize=figsize)
-    ylabel  = "Firing Rate [Hz]"  # overwritten inside loop
-    cf_infos = []  # per-group CF description, used in the title
+    ylabel  = "Firing Rate [Hz]"
+    cf_infos = []
 
-    for gi, (group, color, label) in enumerate(zip(groups, colors, labels)):
+    for (cur_side, gi, color, label) in curve_specs:
+        group          = groups[gi]
         this_target_cf = target_cf_hz_list[gi]
         this_center_cf = center_cf_list[gi]
 
         # --------------------------------------------------------------
-        # Resolve CF interval for THIS group, using its own reference
-        # dataset (safe even if groups have different population sizes).
+        # Resolve CF interval for this group
         # --------------------------------------------------------------
         _ref_data    = group[0]
         _cue_to_rate = _ref_data["cue_to_rate"]
         _first_cue   = list(_cue_to_rate.keys())[0]
-        _n_tmp       = len(_cue_to_rate[_first_cue][side][pop]["global_ids"])
+        _n_tmp       = len(_cue_to_rate[_first_cue][cur_side][pop]["global_ids"])
         _cf_tmp      = greenwood_cf_array(CFMIN / Hz, CFMAX / Hz, _n_tmp) / Hz
 
-        resolved_cf_interval = cf_interval  # may stay None
+        resolved_cf_interval = cf_interval
         cf_idx = None
 
         if this_target_cf is not None:
             _, cf_idx             = take_closest(_cf_tmp, this_target_cf)
             half_bin               = (_cf_tmp[1] - _cf_tmp[0]) * 0.5
             resolved_cf_interval   = [_cf_tmp[cf_idx] - half_bin, _cf_tmp[cf_idx] + half_bin]
-            print(
-                f"[draw_rate_vs_cue_multidata] group '{label}': "
-                f"target_cf_hz={this_target_cf} Hz → neuron idx {cf_idx} → "
-                f"cf_interval=[{resolved_cf_interval[0]:.1f}, {resolved_cf_interval[1]:.1f}] Hz"
-            )
+            # print(
+                #f"[draw_rate_vs_cue_multidata] group '{label}': "
+                # f"target_cf_hz={this_target_cf} Hz → neuron idx {cf_idx} → {cf_idx[1]-cf_idx[0]} neurons "
+                #f"cf_interval=[{resolved_cf_interval[0]:.1f}, {resolved_cf_interval[1]:.1f}] Hz"
+            # )
         elif this_center_cf is not None and bw_neurons is not None:
             _, center_idx = take_closest(_cf_tmp, this_center_cf)
             low_idx  = max(0, center_idx - bw_neurons)
@@ -1902,12 +2378,11 @@ def draw_rate_vs_cue_multidata(
             else:
                 resolved_cf_interval = [_cf_tmp[low_idx], _cf_tmp[high_idx]]
             print(
-                f"[draw_rate_vs_cue_multidata] group '{label}': "
-                f"center_cf={this_center_cf} Hz → neuron idx [{low_idx}, {high_idx}] → "
-                f"cf_interval=[{resolved_cf_interval[0]:.1f}, {resolved_cf_interval[1]:.1f}] Hz"
+                # f"[draw_rate_vs_cue_multidata] group '{label}': "
+                f"center_cf={this_center_cf} Hz → neuron idx [{low_idx}, {high_idx}] → {high_idx-low_idx + 1} neurons "
+                # f"cf_interval=[{resolved_cf_interval[0]:.1f}, {resolved_cf_interval[1]:.1f}] Hz"
             )
 
-        # Neuron count for spk_pn and title, resolved per group
         if resolved_cf_interval is not None:
             _, _ymin_idx = take_closest(_cf_tmp, resolved_cf_interval[0])
             _, _ymax_idx = take_closest(_cf_tmp, resolved_cf_interval[1])
@@ -1932,8 +2407,7 @@ def draw_rate_vs_cue_multidata(
             cf_infos.append(f"{label}: CF=full ({n_band} neurons)")
 
         # --------------------------------------------------------------
-        # Per-dataset firing rate extraction (unchanged apart from using
-        # this group's resolved_cf_interval)
+        # Per-dataset firing rate extraction
         # --------------------------------------------------------------
         all_avg   = []
         all_pop   = []
@@ -1953,11 +2427,11 @@ def draw_rate_vs_cue_multidata(
                 effective_duration = (time_interval[1] - time_interval[0]) * b2.ms
                 atr_filtered = {}
                 for cue in cues:
-                    atr_filtered[cue] = {side: {}}
-                    for p in cue_to_rate[cue][side]:
-                        atr_filtered[cue][side][p] = (
-                            _filter_spike_dict(cue_to_rate[cue][side][p], time_interval)
-                            if p == pop else cue_to_rate[cue][side][p]
+                    atr_filtered[cue] = {cur_side: {}}
+                    for p in cue_to_rate[cue][cur_side]:
+                        atr_filtered[cue][cur_side][p] = (
+                            _filter_spike_dict(cue_to_rate[cue][cur_side][p], time_interval)
+                            if p == pop else cue_to_rate[cue][cur_side][p]
                         )
                 atr_to_use = atr_filtered
                 dur_to_use = effective_duration
@@ -1966,13 +2440,12 @@ def draw_rate_vs_cue_multidata(
                 dur_to_use = duration
 
             tot_d, avg_d, cnt_d = calculate_firing_rates(
-                atr_to_use, pop, [side], cues, dur_to_use, resolved_cf_interval,
+                atr_to_use, pop, [cur_side], cues, dur_to_use, resolved_cf_interval,
             )
-            all_avg.append(avg_d[side])
-            all_pop.append(tot_d[side])
-            all_count.append(cnt_d[side])
+            all_avg.append(avg_d[cur_side])
+            all_pop.append(tot_d[cur_side])
+            all_count.append(cnt_d[cur_side])
 
-        # Aggregate across runs in this group
         mean_avg   = np.mean(all_avg,   axis=0)
         mean_pop   = np.mean(all_pop,   axis=0)
         mean_count = np.mean(all_count, axis=0)
@@ -1992,21 +2465,21 @@ def draw_rate_vs_cue_multidata(
             err_avg = err_pop = err_count = None
 
         # --------------------------------------------------------------
-        # Select rate mode — mirrors draw_rate_vs_cue exactly
+        # Select rate mode
         # --------------------------------------------------------------
         if rate == 'avg':
             y_vals, y_err = mean_avg,   err_avg
-            ylabel        = "Avg Firing Rate [Hz]"
+            ylabel        = "Firing Rate [Hz]"
         elif rate == 'pop':
             y_vals, y_err = mean_pop,   err_pop
             ylabel        = "Population Firing Rate [Hz]"
         elif rate == 'spk':
             y_vals, y_err = mean_count, err_count
-            ylabel        = "Spike Count"
+            ylabel        = "# of spikes"
         elif rate == 'spk_pn':
             y_vals = np.array(mean_count) / n_band
             y_err  = np.array(err_count)  / n_band if err_count is not None else None
-            ylabel = "Spikes / Neuron"
+            ylabel = "Spikes / Rep"
         elif rate == 'mm_norm':
             y_min, y_max = np.array(mean_avg).min(), np.array(mean_avg).max()
             y_vals = (np.array(mean_avg) - y_min) / (y_max - y_min + 1e-12)
@@ -2038,36 +2511,26 @@ def draw_rate_vs_cue_multidata(
     # ------------------------------------------------------------------
     if cue_type == "angle":
         ax.set_xticks(cues)
+        # ax.set_xticklabels([])  
         ax.set_xticklabels([f"{int(c)}°" for c in cues])
         ax.set_xlabel("Azimuth Angle [deg]")
         if xlim:
             ax.set_xlim(xlim)
     elif cue_type == "itd":
-        if xlim:
-            xlim_s = [xlim[0]/1e6, xlim[1]/1e6]
-            ax.set_xlim(xlim_s)
-            visible_cues = [c for c in cues if xlim_s[0] <= c <= xlim_s[1]]
-        else:
-            visible_cues = cues
-
-        max_ticks = 11
-        if len(visible_cues) > max_ticks:
-            step = max(1, len(visible_cues) // max_ticks)
-            subsampled = visible_cues[::step]
-            # Ensure 0 is always included
-            if 0.0 not in subsampled:
-                zero_idx = np.argmin(np.abs(np.array(visible_cues)))
-                zero_val = visible_cues[zero_idx]
-                subsampled = sorted(set(subsampled) | {zero_val})
-            visible_cues = subsampled
+        visible_cues = np.concatenate([
+            np.linspace(-0.005, -0.001,  4, endpoint=False),
+            np.linspace(-0.001,  0.001, 5),
+            np.linspace( 0.001,  0.005, 5)[1:]
+        ])
 
         ax.set_xticks(visible_cues)
         ax.set_xticklabels(
             [f"{round(c * 1e6)}" for c in visible_cues],
-            rotation=45,
-            ha='right'
+            rotation=45, ha='right'
         )
         ax.set_xlabel("ITD [µs]")
+        if pop == 'MSO':
+            ax.axvline(0, color='k', linewidth=0.5)
     elif cue_type == "ild":
         visible_cues = cues
         if len(visible_cues) > 11:
@@ -2090,28 +2553,50 @@ def draw_rate_vs_cue_multidata(
     ax.set_ylabel(ylabel)
     if ylim:
         ax.set_ylim(ylim)
-    ax.legend(fontsize=8, ncol=max(1, n_groups // 10))
+    if labels is not None:
+        ax.legend(fontsize=11, ncol=max(1, len(curve_specs) // 10))
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
-    # ------------------------------------------------------------------
-    # Title — CF info is now per-group since each group may target a
-    # different characteristic frequency.
-    # ------------------------------------------------------------------
     header_parts = []
     if time_interval is not None:
         header_parts.append(f"t=[{time_interval[0]},{time_interval[1]}] ms")
 
-    base_title = f"{pop} — side {side} ({n_groups} groups)"
+    base_title = f"{pop} — side {'L+R' if plot_both else side} ({n_groups} groups)"
     subtitle   = "  |  ".join(header_parts + cf_infos) if (header_parts or cf_infos) else ""
-    # ax.set_title(base_title + ("\n" + subtitle if subtitle else ""), fontsize=9)
-    ax.set_title(base_title)
 
     if title:
         fig.suptitle(title, fontsize=13, fontweight='bold')
 
     plt.tight_layout()
     return fig, ax
+
+
+
+
+# ---------------------------------------------------------------------------
+# Helper: generate n perceptually distinct shades between dark_hex and
+# light_hex (inclusive), returned as a list of hex strings.
+# ---------------------------------------------------------------------------
+def _make_shades(dark_hex, light_hex, n):
+    """
+    Return n hex color strings interpolated in RGB space from dark_hex to
+    light_hex. For n==1 the midpoint is returned so it doesn't look washed
+    out or too dark by itself.
+    """
+    if n == 1:
+        # Single group: use a mid-tone rather than the extreme dark or light
+        dark  = np.array(plt.matplotlib.colors.to_rgb(dark_hex))
+        light = np.array(plt.matplotlib.colors.to_rgb(light_hex))
+        mid   = (dark + light) / 2
+        return [plt.matplotlib.colors.to_hex(mid)]
+
+    dark  = np.array(plt.matplotlib.colors.to_rgb(dark_hex))
+    light = np.array(plt.matplotlib.colors.to_rgb(light_hex))
+    return [
+        plt.matplotlib.colors.to_hex(dark + (light - dark) * i / (n - 1))
+        for i in range(n)
+    ]
 
 def draw_single_neuron_raster(
     data_list,
@@ -2440,6 +2925,111 @@ def draw_single_neuron_raster_by_cue(
     plt.tight_layout()
     return fig, (ax_sound, ax_raster, ax_psth)# ─────────────────────────────────────────────────────────────────────────────
 
+def draw_psth_single_neuron(
+    res,
+    cue,
+    pop,
+    center_cf,
+    bw_neurons=0,
+    side=None,  # None = both sides overlaid, 'L' or 'R' = single side only
+    xlim=None,
+    psth_bin_size=1,
+    hist_rate=True,
+    title=None,
+    figsize=(10, 4),
+    ax=None,
+):
+    """
+    Plot the PSTH for a single neuron (bw_neurons=0) or a cluster of neurons
+    around a given characteristic frequency (bw_neurons>0), for one or both
+    sides.
+
+    Parameters
+    ----------
+    center_cf : float
+        Target characteristic frequency (Hz) — the neuron closest to this CF
+        is selected as the center of the cluster.
+    bw_neurons : int
+        Number of neurons on each side of the center to include. 0 = single
+        neuron only.
+    side : None | 'L' | 'R'
+        None overlays both sides on the same axes; 'L'/'R' plots only that
+        side.
+    hist_rate : bool
+        If True, y-axis is avg firing rate (Hz) normalized by cluster size;
+        if False, raw spike count per bin.
+    ax : matplotlib Axes, optional
+        Existing axes to draw on. Creates a new figure if None.
+    """
+    side_colors = {'L': 'm', 'R': 'g'}
+
+    if side is not None and side not in side_colors:
+        raise ValueError(f"side must be None, 'L', or 'R' — got {side!r}")
+    sides_to_plot = list(side_colors.keys()) if side is None else [side]
+
+    duration = res.get("simulation_time", res["sounds"]["base_sound"].sound.duration / b2.ms)
+    if xlim is None:
+        xlim = [0, duration]
+
+    # ------------------------------------------------------------------
+    # Resolve the neuron cluster around center_cf (same logic as
+    # draw_spikes_and_psth_bothside)
+    # ------------------------------------------------------------------
+    _n_tmp = len(res["cue_to_rate"][cue][sides_to_plot[0]][pop]["global_ids"])
+    cf_full = greenwood_cf_array(CFMIN / b2.Hz, CFMAX / b2.Hz, _n_tmp) / b2.Hz
+    _, center_idx = take_closest(cf_full, center_cf)
+    low_idx = max(0, center_idx - bw_neurons)
+    high_idx = min(_n_tmp - 1, center_idx + bw_neurons)
+    n_cluster = high_idx - low_idx + 1
+
+    print(
+        f"[draw_psth_single_neuron] center_cf={center_cf} Hz → "
+        f"neuron idx [{low_idx}, {high_idx}] (n={n_cluster}, "
+        f"actual CF={cf_full[center_idx]:.1f} Hz)"
+    )
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    else:
+        fig = ax.figure
+
+    bins = np.arange(xlim[0], xlim[1] + psth_bin_size, psth_bin_size)
+
+    for s in sides_to_plot:
+        spikes = res["cue_to_rate"][cue][s][pop]
+        times = spikes["times"]
+        senders = spikes["senders"]
+        gids = spikes["global_ids"]
+
+        cluster_min_id = gids[0] + low_idx
+        cluster_max_id = gids[0] + high_idx
+
+        mask_t = (times >= xlim[0]) & (times <= xlim[1])
+        mask_cf = (senders >= cluster_min_id) & (senders <= cluster_max_id)
+        times_f = times[mask_t & mask_cf]
+
+        counts, _ = np.histogram(times_f, bins=bins)
+
+        if hist_rate:
+            values = (counts * 1000.0) / (psth_bin_size * n_cluster)
+            ylabel = "Avg Firing rate [Hz]"
+        else:
+            values = counts
+            ylabel = "Spike count"
+
+        avg_value = values.mean()
+        ax.plot(bins[:-1], values, color=side_colors[s], alpha=0.8, lw=1.5, label=s)
+        ax.axhline(avg_value, linestyle='--', linewidth=1.5, color=side_colors[s], alpha=0.7)
+
+    ax.set_xlabel("Time [ms]")
+    ax.set_ylabel(ylabel)
+    ax.set_xlim(xlim)
+    ax.legend()
+
+    default_title = f"{pop} PSTH — CF≈{cf_full[center_idx]:.0f} Hz (n={n_cluster})"
+    ax.set_title(title or default_title)
+
+    return fig, ax
 # METRIC COMPUTATION
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3220,61 +3810,46 @@ def get_avg_rate_vs_cue(
         "n_neurons": n_neurons,
     }
  
-def four_param_sigmoid(x, bottom, top, ild50, slope):
+def four_param_sigmoid(x, bottom, top, half, slope):
     """4-parameter logistic. slope>0 -> decreasing curve, slope<0 -> increasing."""
-    return bottom + (top - bottom) / (1.0 + np.exp((x - ild50) / slope))
+    return bottom + (top - bottom) / (1.0 + np.exp((x - half) / slope))
+
+def _r_squared(y, y_fit):
+    ss_res = np.sum((y - y_fit) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    return 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
 
 def extract_ild50_metrics(
     cues,
     rate,
-    ipsi_ref='min',
     normalize=True,
-    p0=None,
     maxfev=20000,
 ):
     """
-    Fit a 4-parameter sigmoid to an avg-rate vs contralateral-level ('ild_exp')
-    curve and extract max rate, min rate, and ILD50 (half-maximal contralateral
-    level), following the normalize-to-monaural-ipsi -> sigmoid-fit approach.
+    Fit a 4-parameter sigmoid to an avg-rate vs contralateral-level curve and
+    extract max rate, min rate, and ILD50 (half-maximal contralateral level).
 
-    Parameters
-    ----------
-    cues : array-like
-        Contralateral levels (dB) — x-axis of the ild_exp curve.
-    rate : array-like
-        Avg firing rate (Hz), same order as cues.
-    ipsi_ref : 'min' | 'max' | float
-        Which cue represents monaural ipsilateral stimulation (weakest/no
-        contralateral drive), used as the 100% reference. Pick 'min' if the
-        smallest contra level in your sweep is effectively "off", 'max' if
-        it's the other end, or pass an explicit cue value.
-    normalize : bool
-        If True, rescale so rate at ipsi_ref == 100 before fitting (this
-        matches the IID50 definition). If False, fits raw Hz.
-    p0 : tuple, optional
-        Initial guess (bottom, top, ild50, slope).
-
-    Returns
-    -------
-    dict: max_rate, min_rate, ild50, slope, fit_params, fit_curve_fn,
-          r_squared, cues, rate (post-normalization)
+    The monaural ipsilateral reference is taken as the rate at cue == 0
+    (no contralateral drive), used as the 100% normalization point.
     """
     cues = np.asarray(cues, dtype=float)
     rate = np.asarray(rate, dtype=float)
+    if cues.shape != rate.shape:
+        raise ValueError("cues and rate must have the same shape")
+    if np.isnan(cues).any() or np.isnan(rate).any():
+        raise ValueError("cues/rate contain NaNs")
+
     order = np.argsort(cues)
     cues, rate = cues[order], rate[order]
 
     if normalize:
-        if ipsi_ref == 'min':
-            ref_val = rate[0]
-        elif ipsi_ref == 'max':
-            ref_val = rate[-1]
-        else:
-            _, idx = take_closest(cues, ipsi_ref)
-            ref_val = rate[idx]
+        zero_val, zero_idx = take_closest(cues, 0.0)
+        if not np.isclose(zero_val, 0.0):
+            raise ValueError(f"No cue == 0 found (closest was {zero_val}) — cannot normalize.")
+        ref_val = rate[zero_idx]
         if ref_val == 0:
-            raise ValueError("Reference (monaural ipsi) rate is 0 — cannot normalize.")
-        y = 1 * rate / ref_val
+            raise ValueError("Reference (monaural ipsi, cue=0) rate is 0 — cannot normalize.")
+        y = 100 * rate / ref_val
     else:
         y = rate
 
@@ -3282,20 +3857,23 @@ def extract_ild50_metrics(
     corr = np.corrcoef(cues, y)[0, 1]
     sign = 1.0 if corr < 0 else -1.0
 
-    if p0 is None:
-        bottom0 = float(np.min(y))
-        top0 = float(np.max(y))
-        ild500 = cues[np.argmin(np.abs(y - (top0 + bottom0) / 2))]
-        slope0 = sign * (cues[-1] - cues[0]) / 10.0
-        p0 = (bottom0, top0, ild500, slope0)
+    bottom0 = float(np.min(y))
+    top0 = float(np.max(y))
+    span = cues[-1] - cues[0]
+    ild500 = cues[np.argmin(np.abs(y - (top0 + bottom0) / 2))]
+    slope0 = sign * span / 10.0
+    p0 = (bottom0, top0, ild500, slope0)
 
-    popt, pcov = curve_fit(four_param_sigmoid, cues, y, p0=p0, maxfev=maxfev)
+    bounds = (
+        [-np.inf, -np.inf, cues[0] - span, -np.inf if sign < 0 else 1e-6],
+        [np.inf, np.inf, cues[-1] + span, np.inf if sign > 0 else -1e-6],
+    )
+
+    popt, pcov = curve_fit(
+        four_param_sigmoid, cues, y, p0=p0, maxfev=maxfev, bounds=bounds
+    )
     bottom, top, ild50, slope = popt
-
     y_fit = four_param_sigmoid(cues, *popt)
-    ss_res = np.sum((y - y_fit) ** 2)
-    ss_tot = np.sum((y - np.mean(y)) ** 2)
-    r_squared = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
 
     return {
         "max_rate": float(np.max(y)),
@@ -3304,7 +3882,7 @@ def extract_ild50_metrics(
         "slope": float(slope),
         "fit_params": {"bottom": bottom, "top": top, "ild50": ild50, "slope": slope},
         "fit_curve_fn": lambda x, p=popt: four_param_sigmoid(np.asarray(x, dtype=float), *p),
-        "r_squared": float(r_squared),
+        "r_squared": _r_squared(y, y_fit),
         "normalized": normalize,
         "cues": cues,
         "rate": y,
@@ -3807,39 +4385,162 @@ def extract_best_itd_ipd(curve, freq_hz):
     best_ipd_deg = best_ipd_cycles * 360.0
  
     return {
-        "freq_hz": freq_hz,
         "best_itd": best_itd,          # seconds
         "best_rate": best_rate,
         "best_ipd_cycles": best_ipd_cycles,
         "best_ipd_deg": best_ipd_deg,
     }
  
-def plot_best_itd_ipd_vs_freq(results, figsize=(10, 4)):
+def plot_best_itd_ipd_vs_freq(freqs, results, mode='itd', ylim = None, figsize=(6, 4)):
     """
     results: list of dicts as returned by extract_best_itd_ipd, one per
-    frequency. Plots best ITD (µs) and best IPD (cycles) vs frequency.
+    frequency. Plots either best ITD (µs) or best IPD (cycles) vs
+    frequency, with a linear regression line through the data range.
+
+    mode: 'itd' or 'ipd'
     """
-    results = sorted(results, key=lambda r: r["freq_hz"])
-    freqs = [r["freq_hz"] for r in results]
-    itds_us = [r["best_itd"] * 1e6 for r in results]
-    ipds_cyc = [r["best_ipd_cycles"] for r in results]
- 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize)
- 
-    ax1.plot(freqs, itds_us, "o-", color="m")
-    ax1.set_xlabel("Frequency [Hz]")
-    ax1.set_ylabel("Best ITD [µs]")
-    ax1.set_title("Best ITD vs Frequency")
- 
-    ax2.plot(freqs, ipds_cyc, "o-", color="g")
-    ax2.set_xlabel("Frequency [Hz]")
-    ax2.set_ylabel("Best IPD [cycles]")
-    ax2.set_title("Best IPD vs Frequency")
- 
+    freqs = np.asarray(freqs, dtype=float)
+
+    if mode == 'itd':
+        y = np.array([r["best_itd"] * 1e6 for r in results])
+        ylabel = "Best ITD [µs]"
+        title = "Best ITD vs Frequency"
+    elif mode == 'ipd':
+        y = np.array([r["best_ipd_cycles"] for r in results])
+        ylabel = "Best IPD [cycles]"
+        title = "Best IPD vs Frequency"
+    else:
+        raise ValueError("mode must be 'itd' or 'ipd'")
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(freqs, y, "o", color='tab:blue', alpha=0.6,)
+
+    slope, intercept = np.polyfit(freqs, y, 1)
+    x_fit = np.linspace(freqs.min(), freqs.max(), 200)
+    y_fit = slope * x_fit + intercept
+    ax.plot(x_fit, y_fit, "-", color='tab:red')
+
+    ax.set_xlabel("Frequency [Hz]")
+    ax.set_ylabel(ylabel)
+    ax.legend(fontsize=8)
+    if ylim != None:
+        ax.set_ylim(ylim)
+
     plt.tight_layout()
     plt.show()
-    return fig, (ax1, ax2)
- 
+    return fig, ax
+
+def compute_cd_cp(freqs, results):
+    """
+    Compute Characteristic Delay (CD) and Characteristic Phase (CP)
+    from Best IPD vs frequency.
+
+    Parameters
+    ----------
+    freqs : array-like
+        Frequencies in Hz.
+    results : list of dict
+        Output of extract_best_itd_ipd(), one dict per frequency.
+
+    Returns
+    -------
+    dict containing:
+        cd_sec      : Characteristic Delay [s]
+        cd_us       : Characteristic Delay [µs]
+        cp_cycles   : Characteristic Phase [cycles]
+        slope       : regression slope (= CD)
+        intercept   : regression intercept (= CP)
+        r2          : coefficient of determination
+    """
+    freqs = np.asarray(freqs, dtype=float)
+    ipd = np.asarray([r["best_ipd_cycles"] for r in results], dtype=float)
+
+    # Linear regression: IPD = CD * f + CP
+    slope, intercept = np.polyfit(freqs, ipd, 1)
+
+    pred = slope * freqs + intercept
+
+    ss_res = np.sum((ipd - pred) ** 2)
+    ss_tot = np.sum((ipd - np.mean(ipd)) ** 2)
+
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+    return {
+        "cd_sec": slope,
+        "cd_us": slope * 1e6,
+        "cp_cycles": intercept,
+        "slope": slope,
+        "intercept": intercept,
+        "r2": r2,
+    }
+
+def plot_cd_cp(freqs, results, figsize=(6, 4)):
+    """
+    Plot Best IPD vs frequency together with the CD/CP regression.
+
+    CD is the slope of the regression (shown in the legend).
+    CP is the y-intercept and is highlighted graphically.
+
+    Parameters
+    ----------
+    freqs : array-like
+        Frequencies (Hz)
+    results : list
+        Output of extract_best_itd_ipd()
+    """
+
+    freqs = np.asarray(freqs, dtype=float)
+    ipd = np.asarray([r["best_ipd_cycles"] for r in results], dtype=float)
+
+    stats = compute_cd_cp(freqs, results)
+
+    cd_us = stats["cd_us"]
+    cp = stats["cp_cycles"]
+    r2 = stats["r2"]
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # data
+    ax.plot(freqs, ipd, "o", color="m", ms=7, label="Best IPD")
+
+    # regression
+    xfit = np.linspace(0, freqs.max() * 1.05, 300)
+    yfit = stats["cd_sec"] * xfit + cp
+    ax.plot(
+        xfit,
+        yfit,
+        "k-",
+        lw=2,
+        label=f"Fit\nCD = {cd_us:.1f} µs\n$R^2$ = {r2:.3f}",
+    )
+
+    # ----- CP -----
+    ax.scatter(
+        0,
+        cp,
+        s=80,
+        color="red",
+        zorder=5,
+    )
+
+    ax.annotate(
+        f"CP = {cp:.3f}",
+        xy=(0, cp),
+        xytext=(0.08 * freqs.max(), cp + 0.05),
+        arrowprops=dict(arrowstyle="->"),
+        fontsize=9,
+    )
+
+    # cosmetics
+    ax.set_xlim(left=0)
+    ax.set_xlabel("Frequency [Hz]")
+    ax.set_ylabel("Best IPD [cycles]")
+    ax.set_title("Characteristic Delay and Characteristic Phase")
+    ax.legend(fontsize=8)
+
+    plt.tight_layout()
+
+    return fig, ax
 # ─────────────────────────────────────────────────────────────────────────────
 # PLOTTING
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4192,7 +4893,6 @@ def plot_ild50_fit_xpaper(
     fit_color='C3',
     show_sem=True,
     sem=None,
-    title=None,
     xlabel="ILD (dB)",
     ylabel="Firing Rate (%)",
     n_fit_points=200,
@@ -4202,6 +4902,9 @@ def plot_ild50_fit_xpaper(
     the fitted sigmoid, expressed as ILD (contra - ipsi level), marking
     ILD50 with a horizontal line from the y-axis to x=0, and dropping
     vertical reference lines from ILD50 and from (0, 50) down to the x-axis.
+
+    Publication-style version: no title, no numeric ILD50 value shown,
+    minimal spines, serif font, inward ticks.
 
     Parameters
     ----------
@@ -4219,6 +4922,18 @@ def plot_ild50_fit_xpaper(
         Only meaningful if metrics was NOT normalized (normalize=False),
         since sem here is in raw Hz, not on the normalized scale.
     """
+    # --- publication style defaults (only touches this axes' rc-relevant bits) ---
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.size": 14,
+        "axes.linewidth": 0.8,
+        "xtick.direction": "in",
+        "ytick.direction": "in",
+        "xtick.major.size": 4,
+        "ytick.major.size": 4,
+        "legend.frameon": False,
+    })
+
     # convert contralateral cues -> ILD (contra - ipsi)
     ild = ipsi_level - metrics["cues"]
     y = metrics["rate"]
@@ -4244,16 +4959,18 @@ def plot_ild50_fit_xpaper(
         sem_pct = 100 * np.asarray(sem) / (metrics["max_rate"] - metrics["min_rate"])
         ax.errorbar(
             ild, y_pct, yerr=sem_pct, fmt='o', color=data_color,
-            capsize=3, label='data (mean ± SEM)', zorder=3,
+            ms=5, mew=0.8, mfc='white', capsize=3, elinewidth=0.8,
+            label='data (mean ± SEM)', zorder=3,
         )
     else:
-        ax.plot(ild, y_pct, 'o', color=data_color, label='data', zorder=3)
+        ax.plot(ild, y_pct, 'o', color=data_color, ms=5, mfc='white',
+                mew=0.8, label='data', zorder=3)
 
     # smooth fitted sigmoid, evaluated in original contra-level space
     x_fit_contra = np.linspace(metrics["cues"].min(), metrics["cues"].max(), n_fit_points)
     x_fit_ild = ipsi_level - x_fit_contra
     y_fit_pct = fit_fn_pct(x_fit_contra)
-    ax.plot(x_fit_ild, y_fit_pct, '-', color=fit_color, lw=2, label='sigmoid fit', zorder=2)
+    ax.plot(x_fit_ild, y_fit_pct, '-', color=fit_color, lw=1.8, label='sigmoid fit', zorder=2)
 
     # ILD50: convert from contra level to ILD
     ild50 = ipsi_level - metrics["ild50"]
@@ -4264,20 +4981,18 @@ def plot_ild50_fit_xpaper(
     if sem_pct is not None:
         y_lo = min(y_lo, np.min(y_pct - sem_pct))
         y_hi = max(y_hi, np.max(y_pct + sem_pct))
-        pad = 0.05 * (y_hi - y_lo)
-        y_lo -= pad
-        y_hi += pad
+    pad = 0.05 * (y_hi - y_lo)
+    y_lo -= pad
+    y_hi += pad
 
     ax.set_ylim(y_lo, y_hi)
-    # keep ticks at the standard 0-100 steps regardless of padded limits
     ax.set_yticks(range(0, 125, 25))
 
     ax.invert_xaxis()
     xmin, xmax = ax.get_xlim()
-  
 
-    ax.plot(ild50, y_at_ild50, '*', color='b', ms=10, zorder=4,
-            label=f'ILD_50 = {abs(ild50):.1f} dB')
+    # ILD50 marker — label carries no numeric value
+    ax.plot(ild50, y_at_ild50, '*', color='b', ms=10, zorder=4, label=r'ILD$_{50}$')
 
     # horizontal line: from y-axis (xmin) to x = 0, at y = 50
     ax.plot([xmin, ild50], [y_at_ild50, y_at_ild50],
@@ -4287,13 +5002,29 @@ def plot_ild50_fit_xpaper(
     ax.plot([ild50, ild50], [y_lo, y_at_ild50],
             color=fit_color, ls='--', lw=1, alpha=0.7)
 
-
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(y_lo, y_hi)
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    ax.set_title(title or f"R² = {metrics['r_squared']:.3f}")
-    ax.legend(loc='best', fontsize=8)
+    # no title in paper figures
+
+    # trim spines
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    # horizontal line: from y-axis (xmin) to x = 0, at y = 50
+    ax.plot([xmin, ild50], [y_at_ild50, y_at_ild50],
+            color=fit_color, ls='--', lw=1, alpha=0.7)
+
+    # label the ILD50 value directly on the horizontal dashed line
+    x_mid = (xmin + ild50) / 2
+    ax.text(x_mid, y_at_ild50, f"ILD\u2085\u2080:{int(abs(ild50))} dB", color='k', fontsize=14, ha='center', va='bottom')
+
+    # vertical line: from ILD50 down to bottom of axes (y_lo)
+    ax.plot([ild50, ild50], [y_lo, y_at_ild50],
+            color=fit_color, ls='--', lw=1, alpha=0.7)
+
+    ax.legend(loc='best', handlelength=1.5)
 
     return ax
