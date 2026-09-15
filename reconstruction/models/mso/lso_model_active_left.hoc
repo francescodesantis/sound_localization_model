@@ -1,0 +1,143 @@
+// Left LSO cell: the mirror of the right one (model x negated), which keeps
+// the axon on head +z while tonotopy and the dendritic tilt stay
+// mirror-symmetric. Only the axon has a non-zero x, so mirroring touches
+// nothing else.
+// LSO multicompartment morphology, active conductances, human dimensions.
+//
+// Morphology (human):
+//   Primary dendrites traceable to 400 um from the soma.
+//   Soma sizes, transverse plane (major x minor axis, % of population):
+//     stellate ~50%   27 x 13 um   (ellipse area 278 +/- 11 um2)
+//     fusiform ~25%   34 x  9 um   (ellipse area 241 +/-  9 um2)
+//     round    ~25%   21 x 14 um   (ellipse area 231 +/- 13 um2)
+//   The soma here is the 50/25/25 weighted mean (27.25 x 12.25, so L=27,
+//   dia=12), as a NEURON cylinder with length = major axis, diameter = minor.
+//
+// Channel kinetics: Rothman & Manis 2003 (klt, kht, nax, ih); AHP (ahp.mod).
+// Conductance densities are gerbil-derived (Helfert & Schwartz 1987;
+// Haragopal & Winters 2023). They are per-area (S/cm2) and carry over
+// unchanged, but have not been validated against human data.
+//
+// Sections (model axes: x dorsoventral, y rostrocaudal, z mediolateral):
+//   soma:   L = 27 um, dia = 12 um, along y, the dendritic axis
+//   dend_A: primary dendrite, +y, 400 um
+//   dend_B: primary dendrite, -y, 400 um
+//   axon:   150 um along AXON_DIR = (1,1,0)/sqrt2, the ascending lemniscus
+//
+// Two limitations, both inflating the modelled dendritic dipole:
+//
+//   1. Cell type. This is a bipolar cell, two opposed primary dendrites, the
+//      fusiform type and only ~25% of the nucleus. The ~50% stellate cells are
+//      multipolar and radiate dendrites in many directions, contributing a far
+//      weaker coherent dipole, so applying this morphology to the whole
+//      population overstates the summed dipole.
+//
+//   2. Self-cancellation. dend_A and dend_B receive the same SBC excitation,
+//      so their dipoles oppose. After the 150 to 400 um rescale the peak
+//      dendritic dipole grows only 25 to 37 nA.um and is dominated by
+//      stochastic asymmetry in synapse placement (about +/- 18 nA.um over
+//      seeds) rather than by geometry. Dendrite length is not what limits this
+//      model's ABR-relevant dipole; the bipolar symmetry is.
+//
+// The rescale also makes the dendrites electrotonically long. With
+// Rm = 500 ohm.cm2 (tau_m = 0.5 ms, the fast LSO membrane) the space constant
+// is lambda ~ 144 um, so L/lambda goes 1.04 to 2.77 and a distal dend_A
+// synapse (0.040 uS) that gave a 5.36 mV somatic EPSP now gives 0.59 mV.
+// Somatic rheobase rises only 2 to 3 nA, and the LFP pipeline drives synapses
+// from NEST spike trains rather than from this cell's own spiking, so
+// excitability is not on the critical path.
+//
+// Passive params: E_L = -63 mV (params.py E_L.LSO).
+// Conductances:
+//   soma:       klt=0.010, kht=0.010, nax=0.10, ih=0.0005, ahp=0.002  S/cm2
+//   dendrites:  klt=0.002, ih=0.0001                                   S/cm2
+//   axon:       nax=0.35,  klt=0.010, kht=0.015, ih=0.0005             S/cm2
+
+create soma, dend_A, dend_B, axon
+
+access soma
+
+soma {
+    nseg = 1
+    Ra   = 150
+    cm   = 1.0
+    insert pas
+    g_pas = 2.0e-3
+    e_pas = -63.0
+    insert klt
+    gbar_klt = 0.010
+    insert kht
+    gbar_kht = 0.010
+    insert ih
+    gbar_ih = 0.0005
+    insert nax
+    gbar_nax = 0.10
+    ena = 55.0
+    ek  = -77.0
+    insert lso_ahp
+    gbar_lso_ahp = 0.002
+    pt3dadd(0, -13.5, 0, 12)
+    pt3dadd(0,  13.5, 0, 12)
+}
+
+// Primary dendrite A  (+y, 400 um, tapering 3.5 -> 1.5 um)
+dend_A {
+    nseg = 29
+    Ra   = 150
+    cm   = 1.0
+    insert pas
+    g_pas = 2.0e-3
+    e_pas = -63.0
+    insert klt
+    gbar_klt = 0.002
+    insert ih
+    gbar_ih = 0.0001
+    ek = -77.0
+    pt3dadd(0,  13.5, 0, 3.5)
+    pt3dadd(0, 413.5, 0, 1.5)
+}
+
+// Primary dendrite B  (-y, 400 um, tapering 3.5 -> 1.5 um)
+dend_B {
+    nseg = 29
+    Ra   = 150
+    cm   = 1.0
+    insert pas
+    g_pas = 2.0e-3
+    e_pas = -63.0
+    insert klt
+    gbar_klt = 0.002
+    insert ih
+    gbar_ih = 0.0001
+    ek = -77.0
+    pt3dadd(0,  -13.5, 0, 3.5)
+    pt3dadd(0, -413.5, 0, 1.5)
+}
+
+
+// Axon (150 um along AXON_DIR = (1,1,0)/sqrt2, the ascending-lemniscus
+// direction; the extended-axon variant continues along the same line)
+axon {
+    nseg = 5
+    Ra   = 150
+    cm   = 1.0
+    insert pas
+    g_pas = 2.0e-3
+    e_pas = -63.0
+    insert nax
+    gbar_nax = 0.35
+    ena = 55.0
+    insert klt
+    gbar_klt = 0.010
+    insert kht
+    gbar_kht = 0.015
+    insert ih
+    gbar_ih = 0.0005
+    ek = -77.0
+    pt3dadd( -9.546,   9.546, 0, 1.5)
+    pt3dadd(-115.612, 115.612, 0, 1.5)
+}
+
+connect dend_A(0), soma(1)
+connect dend_B(0), soma(0)
+connect axon(0),   soma(0.5)

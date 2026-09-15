@@ -39,3 +39,4 @@ dependencies:
       - pygame==2.6.1
       - sorcery==0.2.2
       - thorns==1
+      - pysofaconventions

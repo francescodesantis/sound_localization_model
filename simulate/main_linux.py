@@ -33,16 +33,18 @@ MODE = "artificial_ild"   # "angle" | "artificial_itd" | "artificial_ild" | "art
 
 SEED = int(os.environ.get("SLURM_SEED", 0))   # fallback to 0 for local runs
 
-nucleus = 'LSO'
+nucleus = 'MSO'
 we = 5
 wi = -80
 d = 0.78
-test_folder = f"we_{we}_wi_{wi}"
+test_folder = "itd_sweep"
 
 inputs = [
+    # Click matching RESULTS/click_70dBbaseline.pic (70 dB peak, 0.05 ms click, 60 ms window)
+    Click(duration=TIME_SIMULATION * b2.ms, click_duration=0.05 * b2.ms, level=70 * b2h.dB),
     # Click_Train(duration=TIME_ON * b2.ms, click_duration=0.05*b2.ms, level=70 * b2h.dB,
     #              interval=5*b2.ms, offset_silence_duration= TIME_OFF * b2.ms),
-    # Tone(0.5 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
+    # Tone(19.9 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
     #      ramp_ms=RAMP_MS, offset_silence_duration=TIME_OFF * b2.ms),
     Tone(19 * b2.kHz, duration=TIME_ON * b2.ms, level=LEVEL * b2h.dB,
          ramp_ms=RAMP_MS, offset_silence_duration=TIME_OFF * b2.ms),
@@ -56,13 +58,11 @@ inputs = [
 if MODE == "angle":
     loop_range = ANGLES
 elif MODE == "artificial_itd":
-    loop_range = np.concatenate([
-        np.linspace(-5000, -1000,  8, endpoint=False),
-        np.linspace(-1000,  1000, 11),
-        np.linspace( 1000,  5000,  9)[1:]
-    ]) * 1e-6
+    # Tolnai Fig 4 grid: 0, +-125, +-500, +-1000, +-2000 us (9 conditions). Key = ITD in sec.
+    loop_range = np.array([-2000, -1000, -500, -125, 0, 125, 500, 1000, 2000]) * 1e-6
 elif MODE == "artificial_ild":
-    loop_range = np.linspace(-25, 25, 11)
+    # Tolnai Fig 5 grid: 0, +-10, +-20, +-30 dB (7 conditions). Key = ILD in dB.
+    loop_range = np.array([-30, -20, -10, 0, 10, 20, 30], dtype=float)
 elif MODE == "artificial_ild_exp":
     loop_range = np.linspace(0, 90, 19) # dB
 
@@ -79,7 +79,9 @@ rng = 42 + SEED
 p = params(f"prefetch_seed_{SEED}")
 p.cochlea[ZI_COC_KEY]["rng_seed"] = rng
 p.cochlea[ZI_COC_KEY]['hrtf_params']['simulation_mode'] = MODE
-p.cochlea[ZI_COC_KEY]['hrtf_params']['cue_to_apply'] = 'ild_only'
+# NOTE: prefetch cochlea params MUST match the main `ps` params exactly, otherwise
+# the joblib ANF cache key differs and the cochlea re-runs after `import nest`
+# (Linux crash). artificial_itd ignores cue_to_apply, so leave it at the default.
 prefetch_ps.append(p)
 
 ps = []
