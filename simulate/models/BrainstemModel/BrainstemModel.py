@@ -34,6 +34,7 @@ class BrainstemModel(SpikingModel):
     def create_network(self, P: Parameters, anfs_per_ear):
         self.pops = {"L": {}, "R": {}}
         self.recs = {"L": {}, "R": {}}
+        # self.multimeters = {"L": {}, "R": {}}
 
 
         for side in ["L", "R"]:
@@ -175,6 +176,27 @@ class BrainstemModel(SpikingModel):
             for pop in self.pops[side].keys():
                 self.recs[side][pop] = nest.Create("spike_recorder")
                 connect(self.pops[side][pop], self.recs[side][pop], "all_to_all")
+
+        # # ------------------------------------------------------
+        # id_neuron = 5133
+        # target_neuron = self.pops["L"]["LSO"][id_neuron]
+        # logger.debug(f"Target neuron global ID: {target_neuron.get('global_id')})")
+        # # assert target_neuron.get("global_id") == 164434
+
+        # self.multimeters["L"][f"LSO_{id_neuron}"] = nest.Create(
+        #     "multimeter",
+        #     params={
+        #         "record_from": ["V_m", "g_ex", "g_in"],
+        #         "interval": 0.1,
+        #     },
+        # )
+
+        # connect(
+        #     self.multimeters["L"][f"LSO_{id_neuron}"],
+        #     target_neuron,
+        #     "all_to_all",
+        # )
+             
 
         # real ANFs (generators) to parrots
         connect(self.pops["R"]["ANF"], self.pops["R"]["parrot_ANF"], "one_to_one", syn_spec={"delay": 0.01})
@@ -411,5 +433,7 @@ class BrainstemModel(SpikingModel):
                         **pop_data.get("events"),
                         "global_ids": self.pops[side][pop_name].get("global_id"),
                     }
+                    
+        result["L"]["LSO_multimeter"] = (self.multimeters["L"]["LSO_5133"].get("events"))
 
         return result
