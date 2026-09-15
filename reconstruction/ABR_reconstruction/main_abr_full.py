@@ -49,7 +49,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from recon_core import head_model, io_utils, paths
+from recon_core import head_model, io_utils, paths, params as P
 from recon_core.head_geometry import ABR_ELECTRODES
 from recon_core.signal_utils import derive, onset_latency, time_axis
 
@@ -63,7 +63,7 @@ dipoles_dir_for = paths.dipoles_dir_for
 
 # ---------------------------------------------------------------------------
 def _discover(stem, cond_label, want_nuclei, want_sides, want_condition,
-              lso_generator='spiking'):
+              lso_generator='spiking', gbc_dipole='lumped'):
     """Load matching dipole records as (records, srate).
 
     Each record is (label, nucleus, side, p_head, r_dipole). srate comes from
@@ -97,6 +97,22 @@ def _discover(stem, cond_label, want_nuclei, want_sides, want_condition,
             f'    python ABR_reconstruction/main_abr_avcn.py --pic-file ... '
             f'--side both')
 
+    # The split GBC (GBCsyn/GBCspike/GBCtrunk) and the legacy lumped GBC are
+    # ALTERNATIVE models of the same cell, never summed -- the same rule the LSO
+    # generators follow. _discover is glob-driven with no count check, so a
+    # stale AVCN__GBC__*.h5 left over from a --gbc-dipole lumped run would
+    # otherwise be summed alongside the three split records and silently DOUBLE
+    # COUNT the GBC. gbc_dipole picks which representation to use; 'split'
+    # falls back to the lumped record if no split records exist.
+    _GBC_SPLIT = set(P.GBC_SPLIT_GROUPS)
+    gbc_split_present = False
+    for path in record_paths:
+        a, _p, _r = io_utils.read_dipole_record(path)
+        if a['nucleus'] == 'AVCN' and a['generator'] in _GBC_SPLIT:
+            gbc_split_present = True
+            break
+    use_split = (gbc_dipole == 'split') and gbc_split_present
+
     cand = {}    # (nucleus, generator, side) to {condition: record}
     srates = set()
     for path in record_paths:
@@ -109,6 +125,10 @@ def _discover(stem, cond_label, want_nuclei, want_sides, want_condition,
             continue
         if nucleus == 'LSO' and generator != lso_generator:
             continue   # keep only the requested LSO drive (mutually exclusive)
+        if nucleus == 'AVCN' and generator == P.GBC_LUMPED_GROUP and use_split:
+            continue   # split records supersede the lumped one (see above)
+        if nucleus == 'AVCN' and generator in _GBC_SPLIT and not use_split:
+            continue   # lumped requested: drop the split records
         if mono is not None:
             # monaural: keep only the ear-driven hemisphere for AVCN/MNTB
             if nucleus == 'AVCN' and side != mono[0]:
@@ -136,7 +156,8 @@ def _discover(stem, cond_label, want_nuclei, want_sides, want_condition,
 
 
 def assemble(stem, cond_label, want_nuclei, sides, condition,
-             lso_generator='synaptic', band=(150., 3000.)):
+             lso_generator='synaptic', band=(150., 3000.),
+             gbc_dipole='lumped'):
     """Collect dipole records for one stimulus and superpose them.
 
     cond_label is the stimulus label the producers filed their records under
@@ -149,7 +170,8 @@ def assemble(stem, cond_label, want_nuclei, sides, condition,
     """
     lo, hi = band
     recs, srate = _discover(stem, cond_label, want_nuclei, set(sides), condition,
-                            lso_generator=lso_generator)
+                            lso_generator=lso_generator,
+                            gbc_dipole=gbc_dipole)
     V_gen = head_model.superpose_sources(
         [(label, p_head, r) for (label, _nuc, _side, p_head, r) in recs],
         ELECTRODES, srate, lo=lo, hi=hi)
@@ -168,10 +190,21 @@ def assemble(stem, cond_label, want_nuclei, sides, condition,
 _derive = derive
 
 
+COMPOSITE_COLOUR = '#5A3A22'      # dark brown
+
+
 def _plot(out_dir, V_gen, V_nuc, srate, side, derivation):
+    """Three stacked panels.
+
+    The middle one repeats the decomposition without the composite: the
+    composite is the largest trace and rescales the shared y-axis, so on the
+    top panel the smaller nuclei are unreadable. Dropping it lets the axis
+    fit the generators themselves.
+    """
     t = time_axis(V_gen['composite'].shape[1], srate)
     cz = ELECTRODES.index('Cz')
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(9, 8), constrained_layout=True)
+    fig, (ax0, axn, ax1) = plt.subplots(3, 1, figsize=(9, 11.5),
+                                        constrained_layout=True)
 
     for nuc in sorted(V_nuc):
         ax0.plot(t, V_nuc[nuc][cz], lw=0.9, label=nuc)
@@ -181,8 +214,15 @@ def _plot(out_dir, V_gen, V_nuc, srate, side, derivation):
     ax0.set_title(f'composite ABR AND per-nucleus decomposition (Cz)  |  side {side}')
     ax0.legend(fontsize=8, ncol=2)
 
+    for nuc in sorted(V_nuc):
+        axn.plot(t, V_nuc[nuc][cz], lw=1.0, label=nuc)
+    axn.axhline(0, color='k', lw=0.4, ls=':')
+    axn.set_xlabel('Time (ms)'); axn.set_ylabel('Cz potential (µV)')
+    axn.set_title(f'per-nucleus decomposition only (Cz)  |  side {side}')
+    axn.legend(fontsize=8, ncol=2)
+
     diff, lbl = _derive(V_gen['composite'], ELECTRODES, derivation)
-    ax1.plot(t, diff, color='darkorchid', lw=1.1, label=f'composite {lbl}')
+    ax1.plot(t, diff, color=COMPOSITE_COLOUR, lw=1.1, label=f'composite {lbl}')
     ax1.axhline(0, color='k', lw=0.4, ls=':')
     ax1.set_xlabel('Time (ms)'); ax1.set_ylabel('Amplitude (µV)')
     ax1.set_title(f'Composite ABR {lbl}  (vertex-positive upward)')
@@ -237,8 +277,18 @@ def main():
     ap.add_argument('--lso-generator', type=str, default='synaptic',
                     choices=['spiking', 'synaptic'], dest='lso_generator',
                     help='which LSO generator to include (alternatives, not summed)')
+    ap.add_argument('--gbc-dipole', type=str, default='lumped',
+                    choices=['split', 'lumped'], dest='gbc_dipole',
+                    help='which GBC representation to include (alternatives, '
+                         'never summed): lumped (default) = the single '
+                         'whole-cell GBC record, split = GBCsyn+GBCspike+'
+                         'GBCtrunk')
     ap.add_argument('--band', type=str, default='150,3000',
                     help='band-pass lo,hi in Hz (default 150,3000)')
+    ap.add_argument('--out-dir', type=str, default=None, dest='out_dir',
+                    help='write here instead of the derived '
+                         'RESULTS/full_abr/<stem>_<cond>_<side>[...] name. A '
+                         'bare name is taken relative to RESULTS/full_abr/.')
     args = ap.parse_args()
 
     pic_file = args.pic_file or os.path.join(REPO_ROOT, 'RESULTS',
@@ -252,18 +302,24 @@ def main():
 
     V_gen, V_nuc, srate = assemble(stem, cond_label, want_nuclei, sides,
                                    args.condition, lso_generator=args.lso_generator,
-                                   band=(lo, hi))
-    print(f'collected generators ({args.condition}, LSO={args.lso_generator}): '
+                                   band=(lo, hi), gbc_dipole=args.gbc_dipole)
+    print(f'collected generators ({args.condition}, LSO={args.lso_generator}, '
+          f'GBC={args.gbc_dipole}): '
           f'{sorted(k for k in V_gen if k != "composite")}')
 
     cond_tag = '' if args.condition == 'binaural' else f'_{args.condition}'
     lso_tag  = '' if args.lso_generator == 'spiking' else f'_lso{args.lso_generator}'
+    gbc_tag  = '' if args.gbc_dipole == 'lumped' else f'_gbc{args.gbc_dipole}'
     # cond_label names the dipole set this composite was built from
     # (RESULTS/abr_tmp/dipoles/<stem>_<cond_label>).
-    out_dir = paths.make_output_dirs(
-        os.path.join(paths.FULL_ABR_DIR,
-                     f'{stem}_{cond_label}_{args.side}{cond_tag}{lso_tag}'),
-        subdirs=('figures',))
+    default_name = f'{stem}_{cond_label}_{args.side}{cond_tag}{lso_tag}{gbc_tag}'
+    if args.out_dir:
+        # absolute/relative path as given; a bare name lands in RESULTS/full_abr/
+        target = (args.out_dir if os.path.sep in args.out_dir
+                  else os.path.join(paths.FULL_ABR_DIR, args.out_dir))
+    else:
+        target = os.path.join(paths.FULL_ABR_DIR, default_name)
+    out_dir = paths.make_output_dirs(target, subdirs=('figures',))
 
     with h5py.File(os.path.join(out_dir, 'ABR_full.h5'), 'w') as f:
         for label, V in V_gen.items():          # per-generator and composite
@@ -272,8 +328,11 @@ def main():
             f.create_dataset(f'nucleus__{nuc}', data=V)
         f.create_dataset('srate', data=srate)
         f.create_dataset('electrode_names', data=np.array(ELECTRODES, dtype='S'))
+        # `condition` is recorded so a downstream figure can pick the
+        # ipsilateral mastoid without parsing the directory name.
         f.attrs.update(units='µV', stem=stem, cond_label=cond_label,
-                       side=args.side, band=f'{lo}-{hi} Hz')
+                       side=args.side, condition=args.condition,
+                       lso_generator=args.lso_generator, band=f'{lo}-{hi} Hz')
     print(f'ABR_full.h5 saved to {out_dir}')
 
     _summary(V_nuc, V_gen, srate)

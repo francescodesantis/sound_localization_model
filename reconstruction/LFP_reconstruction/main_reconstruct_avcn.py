@@ -37,7 +37,7 @@ import LFPy
 import lfpykit.models as lfpykit_models
 import hybridLFPy
 
-from recon_core import params as P, paths
+from recon_core import params as P, paths, tree_dipole
 from recon_core.population import ReconstructionPopulation
 from LFP_reconstruction import figures
 from recon_core.mpi_utils import (COMM, RANK, broadcast_from_root,
@@ -161,6 +161,143 @@ class AVCNPopulation(ReconstructionPopulation):
                      'z': (z_min, z_max)},
             sample_order=('x', 'y', 'z'), ellipse_axes=('x', 'y'),
             min_cell_interdist=min_cell_interdist, sort_axis='x')
+
+
+
+# ---------------------------------------------------------------------------
+# Split GBC generator: three grouped dipoles instead of one lumped whole-cell
+# one. See recon_core/tree_dipole.py for why grouping EDGES is valid where
+# grouping SEGMENTS is not.
+# ---------------------------------------------------------------------------
+class GroupedDipoleMixin:
+    """Write per-compartment-group dipoles into self.output.
+
+    hybridLFPy keys probe output by CLASS NAME and computes it as `M @ imem`
+    (population.py:367-370, 1283-1320) -- a form no edge-grouped decomposition
+    can take, since M multiplies segment currents by positions. So cellsim is
+    overridden.
+
+    ⚠ This is a FORK of hybridLFPy.Population.cellsim (population.py:1244-1326).
+    Two parity details matter and are kept deliberately: the `ss.decimate` call
+    runs even at q=1 (a Chebyshev-I filter the existing records have been
+    through) and the float32 cast. Dropping either makes "sum of groups == the
+    old lumped record" fail at the filter level rather than at float precision.
+    """
+
+    #: {output key: tuple of compartment classes}
+    GROUPS = {}
+
+    #: Blank this much of the start of every cell's imem, before anything else.
+    #: NEURON's finitialize leaves the membrane off equilibrium, so the first
+    #: timestep carries ~0.42 nA of UNBALANCED charge. That breaks the premise
+    #: of the edge decomposition, and in `pos.T @ imem` it is multiplied by the
+    #: cell's displacement from the origin (mean 324 um in the AVCN), producing
+    #: a spurious 515 nA.um artefact LARGER than the 340 nA.um real signal --
+    #: which `ss.decimate`'s IIR filter then smears forward over ~10 ms.
+    #: Blanking here, per cell and before decimation, removes it at source.
+    #: The window is DERIVED: no synaptically driven current can precede the
+    #: shortest endbulb delay, so everything before it is provably non-neural.
+    SETTLE_MS = min(P.GBC_DELAYS[0], P.SBC_DELAYS[0])
+
+    def _tree(self, cell):
+        """(parents, order, classes, pos_mid), recomputed per cell.
+
+        NEURON sections are rebuilt for every cell, so the cached arrays would
+        dangle; measured at 3 ms against a ~1 s simulation, so not worth caching.
+        """
+        parents = tree_dipole.segment_parents(cell)
+        order = tree_dipole.topological_order(parents)
+        classes = gbc_biophysics.segment_compartment_classes(cell)
+        pos_mid = np.c_[cell.x.mean(-1), cell.y.mean(-1), cell.z.mean(-1)]
+        return parents, order, classes, pos_mid
+
+    def cellsim(self, cellindex, return_just_cell=False):
+        import scipy.signal as ss
+        cell = LFPy.Cell(**self.cellParams)
+        cell.set_pos(**self.pop_soma_pos[cellindex])
+        cell.set_rotation(**self.rotations[cellindex])
+        if return_just_cell:
+            return cell
+
+        self.insert_all_synapses(cellindex, cell)
+        for probe in self.probes:
+            probe.cell = cell
+        cell.simulate(**self.simulationParams)          # rec_imem=True
+        cell.imem[:, :int(round(self.SETTLE_MS / cell.dt))] = 0.0
+
+        # Any probes are still honoured, so a plain CurrentDipoleMoment can be
+        # passed alongside as the whole-cell reference: summing the groups must
+        # reproduce it exactly. That identity is the gate on this class.
+        for probe in self.probes:
+            probe.data = probe.get_transformation_matrix() @ cell.imem
+            probe.data = ss.decimate(probe.data,
+                                     q=self.decimatefrac).astype(np.float32)
+            probe.cell = None
+            self.output[cellindex][probe.__class__.__name__] = probe.data.copy()
+
+        parents, order, classes, pos_mid = self._tree(cell)
+        moments, centroids, weights = tree_dipole.group_dipoles(
+            cell.imem, pos_mid, parents, classes, self.GROUPS, order)
+
+        for key in self.GROUPS:
+            self.output[cellindex][key] = ss.decimate(
+                moments[key], q=self.decimatefrac).astype(np.float32)
+            # weighted so the population centroid is a weighted mean after
+            # summing; divided by the summed weight on rank 0.
+            self.output[cellindex][key + '__c'] = (
+                centroids[key] * weights[key]).astype(np.float64)
+            self.output[cellindex][key + '__w'] = np.float64(weights[key])
+
+        for attrbt in self.savelist:
+            attr = getattr(cell, attrbt)
+            if isinstance(attr, np.ndarray):
+                self.output[cellindex][attrbt] = attr.astype('float32')
+            else:
+                try:
+                    self.output[cellindex][attrbt] = attr
+                except BaseException:
+                    self.output[cellindex][attrbt] = str(attr)
+        self.output[cellindex]['srate'] = 1E3 / self.dt_output
+
+        cell.__del__()
+
+
+class GBCSynapticPopulation(GroupedDipoleMixin, AVCNPopulation):
+    """Run A: ANF endbulbs, sodium ABSENT, so the dipole is purely postsynaptic.
+
+    The canonical hybridLFPy treatment (Hagen 2016 drives passive cells). Known
+    one-directional bias: with no AP there is no AHP and no spike-driven
+    KHT/KLT, so nothing truncates the EPSP and this OVERESTIMATES the post-spike
+    envelope. Stated, not testable away.
+    """
+
+    GROUPS = {'GBCsyn': gbc_biophysics.GBC_SYN_CLASSES}
+
+
+class GBCSpikingPopulation(GroupedDipoleMixin, AVCNPopulation):
+    """Run B: the cell's own NEST spike train fires its AIS; no ANF input."""
+
+    PER_POP_SYN = P.GBC_SPIKING_SYNAPSES
+    GROUPS = {'GBCspike': gbc_biophysics.GBC_SPIKE_CLASSES,
+              'GBCtrunk': gbc_biophysics.GBC_TRUNK_CLASSES}
+
+    def select_synapse_idx(self, cell, pop_type, idx, layer):
+        """One suprathreshold synapse on the axon initial segment.
+
+        ⚠ NOT cell.get_idx('Axon_Initial_Segment'): the baked extended-axon hoc
+        names its sections `sections[N]`, so LFPy's section-name matching
+        returns an EMPTY array and the synapse would silently land on segment 0.
+        The compartment-class map is the only way in for this morphology.
+        """
+        segs = gbc_biophysics.seg_idx_for_classes(cell, ('initialsegment',))
+        if len(segs) == 0:
+            segs = gbc_biophysics.seg_idx_for_classes(cell, ('hillock',))
+        if len(segs) == 0:
+            segs = gbc_biophysics.seg_idx_for_classes(cell, ('soma',))
+        if len(segs) == 0:
+            return idx
+        return np.random.choice(segs, size=len(idx),
+                                replace=True).astype('int32')
 
 
 # ---------------------------------------------------------------------------

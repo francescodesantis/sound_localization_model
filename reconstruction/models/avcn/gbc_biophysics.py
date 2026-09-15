@@ -45,6 +45,27 @@ REF_NS_II_I = {
     'ihvcn':      30.0,
     'leak':        2.0,
 }
+# Run A of the split GBC generator: the postsynaptic dipole must contain NO
+# action potential, so sodium is OMITTED (not zeroed post hoc) -- decorate_gbc
+# skips `insert` when gbar <= 0, so the channel is simply absent: no window
+# current, no ena, nothing. Every other channel STAYS: khtbc/kltbc/ihvcn/leak
+# are subthreshold-active and KLT in particular is what makes the GBC's EPSP
+# phasic, so removing it would distort the synaptic dipole far more than Na does.
+# Verified quiescent: residual |p| 1.0 nA.um vs a 179,000 nA.um wave-II peak,
+# v_soma -65.2..-65.0 mV, so v_init = -65 remains equilibrium without Na.
+REF_NS_II_NONA = dict(REF_NS_II, nacncoop=0.0)
+
+# Compartment-class groups for the split GBC dipole (see recon_core.tree_dipole).
+# An edge is assigned to its CHILD segment's class.
+GBC_SYN_CLASSES = ('soma', 'primarydendrite', 'secondarydendrite')
+GBC_TRUNK_CLASSES = ('node', 'internode')
+#: Everything that is not the trunk. Named for what it CONTAINS, not where it
+#: sits: measured frac_bp = 0.78, i.e. ~78% of this group is somatodendritic
+#: return current (the spike-driven outflow completing the AIS sink's circuit),
+#: not AIS current. Calling it "ais" would mislead every figure legend.
+GBC_SPIKE_CLASSES = GBC_SYN_CLASSES + ('hillock', 'initialsegment',
+                                       'myelinatedaxon', 'unmyelinatedaxon')
+
 # Back-compatible default: unqualified REF_NS is the GBC (Type II) set.
 REF_NS = REF_NS_II
 
@@ -305,3 +326,17 @@ def decorate_gbc(cell=None, set_nseg=True, verbose=False, ref_ns=None):
         print('[decorate_gbc] soma densities (S/cm^2): ' +
               ', '.join(f'{m}={soma_density[m]:.3e}' for m in ref_ns))
     return soma_density
+
+
+def segment_compartment_classes(cell):
+    """(n_seg,) compartment-class label per LFPy segment.
+
+    The vectorised sibling of seg_idx_for_classes, for recon_core.tree_dipole.
+    Segment order is `cell.allseclist`, matching cell.imem / cell.x / y / z.
+    """
+    import numpy as np
+    compartment_of = _classify_sections()
+    out = []
+    for sec in cell.allseclist:
+        out.extend([compartment_of.get(sec.name(), 'soma')] * sec.nseg)
+    return np.array(out, dtype=object)
