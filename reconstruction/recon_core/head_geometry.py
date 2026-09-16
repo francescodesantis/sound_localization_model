@@ -80,12 +80,24 @@ def _on_scalp(v):
 # lateral sites used only by plots/electrodes.py.
 _MASTOID_R = np.array([74_300., -42_200., -28_100.])
 
+# FPz, the anterior midline site. Used only by the Parkkonen et al. (2009)
+# validation, whose EEG was recorded between FPz and the left mastoid. In the
+# 10-20 system FPz sits 10% of the nasion-inion arc up from nasion, i.e. 72
+# degrees from the vertex along the midline, hence the direction below. Adding
+# it changes nothing that already existed: ABR_ELECTRODES is unchanged, and
+# every projection takes its electrode list as an argument.
+_FPZ_FROM_CZ_DEG = 72.0
+_FPZ_DIR = np.array([0.0,
+                     np.sin(np.radians(_FPZ_FROM_CZ_DEG)),   # anterior
+                     np.cos(np.radians(_FPZ_FROM_CZ_DEG))])  # superior
+
 ELECTRODE_POS = {
     'Cz': np.array([0., 0., SCALP_R]),
     'M1': _on_scalp(_MASTOID_R * np.array([-1., 1., 1.])),   # left mastoid
     'M2': _on_scalp(_MASTOID_R),                             # right mastoid
     'T7': _on_scalp(np.array([-90_000., 0., 0.])),           # left temporal
     'T8': _on_scalp(np.array([ 90_000., 0., 0.])),           # right temporal
+    'FPz': _on_scalp(_FPZ_DIR),                              # anterior midline
 }
 ELECTRODE_POS['A1'] = ELECTRODE_POS['M1']                    # earlobe alias
 ELECTRODE_POS['A2'] = ELECTRODE_POS['M2']
@@ -214,6 +226,137 @@ POSITION_SOURCE = {
     'SBC': 'A_sitek: cochlear-nucleus ROI, rostral half of the AVCN',
     'MNTB': 'Sitek SOC anchor + Kulesza 2015 (0.40 mm from midline, 2 mm rostral)',
 }
+
+
+# ===========================================================================
+# Auditory nerve: cochlea anchored by offset on the atlas cochlear nucleus
+# ===========================================================================
+# No atlas measures the cochlea — the spiral ganglion sits in the modiolus,
+# inside the petrous temporal bone, which is not brain tissue (see
+# ABR_reconstruction/atlas/ and recon_core/anf_geometry.py).  So the modiolus is
+# placed the way the MNTB is: a literature offset carried on a position the
+# atlases DO give us.  Stepping laterally from the cochlear-nucleus position
+# along the internal auditory canal by the cochlear-nerve length puts the error
+# along ONE known direction instead of in a free 3-D coordinate — and that
+# direction is exactly what ABR_reconstruction/anf_sensitivity.py sweeps.
+from recon_core import anf_geometry as _ag              # noqa: E402
+
+#: Human cochlear-nerve length, spiral ganglion to cochlear-nucleus root.
+COCHLEAR_NERVE_LEN_UM = 24_000.0
+
+#: Internal auditory canal axis, RIGHT side, head frame: laterally (+x), a
+#: little anteriorly (+y) and a little superiorly (+z) from the CN root.
+IAC_AXIS_HEAD_R = np.array([0.94, 0.28, 0.19])
+IAC_AXIS_HEAD_R = IAC_AXIS_HEAD_R / np.linalg.norm(IAC_AXIS_HEAD_R)
+
+
+def _cochlea_to_head_rotation(side):
+    """Cochlear frame -> head frame, per side.
+
+    The cochlear frame's +z is the modiolar axis, which points laterally OUT of
+    the head along the IAC.  Build a right-handed frame around it for the RIGHT
+    side, then obtain the LEFT by sagittal reflection.
+
+    The left transform is therefore IMPROPER (det = -1), and that is correct:
+    the cochlear spiral is chiral and the two cochleae are mirror images.  Every
+    other generator in this module mirrors with a proper rotation because a
+    nucleus position has no handedness; this one does.
+    """
+    ez = IAC_AXIS_HEAD_R                                  # modiolar axis
+    up = np.array([0., 0., 1.])
+    ex = up - up.dot(ez) * ez
+    ex = ex / np.linalg.norm(ex)
+    ey = np.cross(ez, ex)
+    R = np.stack([ex, ey, ez], axis=1)                    # columns = frame axes
+    if side == 'R':
+        return R
+    return np.diag([-1., 1., 1.]) @ R                     # sagittal reflection
+
+
+COCHLEA_TO_HEAD = {s: _cochlea_to_head_rotation(s) for s in ('R', 'L')}
+
+
+def _iac_axis(side):
+    """IAC axis in the head frame, mirrored per side."""
+    axis = IAC_AXIS_HEAD_R.copy()
+    if side == 'L':
+        axis = axis * np.array([-1., 1., 1.])
+    return axis
+
+
+def _modiolus_pos(side, dist_um):
+    """Modiolus origin: CN root + `dist_um` along the IAC axis."""
+    return NUCLEUS_POS_UM['GBC'][side] + dist_um * _iac_axis(side)
+
+
+def _path_from_anchor(side, dist_um):
+    """Fibre path for a given anchor distance -> (vertices, total arc length)."""
+    coch = _ag.representative_trajectory()
+    head = (COCHLEA_TO_HEAD[side] @ coch.T).T + _modiolus_pos(side, dist_um)
+
+    # Central run: porus (last intracochlear vertex) -> CN root.
+    target = NUCLEUS_POS_UM['GBC'][side]
+    n_central = 120
+    tail = np.linspace(head[-1], target, n_central + 1)[1:]
+    path = np.vstack([head, tail])
+    total = np.linalg.norm(np.diff(path, axis=0), axis=1).sum()
+    return path, total
+
+
+def _solve_anchor(side, tol_um=1.0, max_iter=50):
+    """Anchor distance whose TOTAL path length is COCHLEAR_NERVE_LEN_UM.
+
+    Placing the modiolus a full nerve-length along the IAC and THEN prepending
+    the ~6 mm intracochlear trajectory would double-count: the total path would
+    come out ~30 mm against a ~24 mm literature nerve.  The intracochlear part is
+    PART of the nerve, not extra to it.  So the anchor distance is solved for,
+    not assumed.
+
+    The map from anchor distance to total length is smooth and near-linear
+    (moving the anchor along the axis moves the porus almost rigidly), so a
+    secant iteration converges in a handful of steps.
+    """
+    lo = 0.5 * COCHLEAR_NERVE_LEN_UM
+    hi = COCHLEAR_NERVE_LEN_UM
+    f_lo = _path_from_anchor(side, lo)[1] - COCHLEAR_NERVE_LEN_UM
+    f_hi = _path_from_anchor(side, hi)[1] - COCHLEAR_NERVE_LEN_UM
+    for _ in range(max_iter):
+        if abs(f_hi - f_lo) < 1e-9:
+            break
+        mid = hi - f_hi * (hi - lo) / (f_hi - f_lo)
+        f_mid = _path_from_anchor(side, mid)[1] - COCHLEAR_NERVE_LEN_UM
+        lo, f_lo, hi, f_hi = hi, f_hi, mid, f_mid
+        if abs(f_mid) < tol_um:
+            break
+    if abs(f_hi) >= tol_um:
+        raise RuntimeError(
+            f'_solve_anchor({side!r}) did not converge: residual '
+            f'{abs(f_hi):.3f} um >= tol {tol_um:.3f} um after {max_iter} '
+            f'iterations (anchor={hi:.3f} um, target total length='
+            f'{COCHLEAR_NERVE_LEN_UM:.3f} um). ANCHOR_DIST_UM/ANF_PATH_UM are '
+            'computed at import time, so a silently unconverged secant would '
+            'ship a wrong nerve path — refusing to import instead.')
+    return hi
+
+
+ANCHOR_DIST_UM = {s: _solve_anchor(s) for s in ('R', 'L')}
+MODIOLUS_POS_UM = {s: _modiolus_pos(s, ANCHOR_DIST_UM[s]) for s in ('R', 'L')}
+ANF_PATH_UM = {s: _path_from_anchor(s, ANCHOR_DIST_UM[s])[0] for s in ('R', 'L')}
+
+
+def anf_path_binned(n_bins, side):
+    """Resample ANF_PATH_UM to n_bins equal-arc-length bins -> (n_bins+1, 3)."""
+    p = ANF_PATH_UM[side]
+    seg = np.linalg.norm(np.diff(p, axis=0), axis=1)
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    s_new = np.linspace(0.0, s[-1], n_bins + 1)
+    return np.stack([np.interp(s_new, s, p[:, k]) for k in range(3)], axis=1)
+
+
+POSITION_SOURCE['ANF'] = (
+    'Verbist 2010 cochlear frame + Potrusil 2020 micro-CT pathway, anchored by '
+    f'{COCHLEAR_NERVE_LEN_UM * 1e-3:.0f} mm along the IAC axis from the '
+    'Sitek cochlear-nucleus position')
 
 
 # ===========================================================================

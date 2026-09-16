@@ -10,9 +10,24 @@ Two kinds of value live here:
 2. Reconstruction only. NEURON timestep, morphology geometry, probe layout,
    ABR filter bands and the NEURON synaptic conductances.
 
-The conductances are not mirrored: NEST weights are nS for a point neuron,
-these are µS tuned on detailed cells, so the two are not convertible. DT and
-TSTOP are set by the ABR band, not by the NEST resolution.
+The synaptic conductances ARE mirrored, but through a scale factor rather
+than by copying. A NEST weight is a conductance for a point neuron sized by
+the C_m and g_L in the same file; these cells are morphological, so the same
+nS lands on a different input resistance at a different electrotonic distance
+and would not reproduce the NEST dynamics. Each pathway therefore carries one
+reconstruction-only SYN_SCALE, and the conductance is
+
+    weight_uS = abs(NEST weight in nS) * SYN_SCALE[pathway]
+
+The magnitude is taken because NEST signs a synapse by its weight while NEURON
+signs it by the reversal potential, which is itself mirrored. What matters is
+that the professor's file remains the single source: change a weight there and
+the reconstruction follows, and a pathway switched OFF there (weight 0) is off
+here too. That last case is why this is a product and not a table of literals
+-- LNTBCs2MSO is 0 in the NEST model, and a hand-typed 0.025 uS had been
+silently switching it back on.
+
+DT and TSTOP are set by the ABR band, not by the NEST resolution.
 
 Head frame (µm): x dorsoventral, y rostrocaudal, z mediolateral. The geometry
 itself lives in recon_core.head_geometry and is re-exported at the end.
@@ -26,6 +41,44 @@ from recon_core.signal_utils import srate_from_dt
 # Live NEST parameter set. Attribute access mirrors params.py exactly:
 # BRAINSTEM.POP_NUM.n_MSOs, BRAINSTEM.E_L.MSO, BRAINSTEM.POP_CONV.SBCs2MSOs
 BRAINSTEM = brainstem.parameters()
+
+
+# ===========================================================================
+# Synaptic conductances: NEST weight x per-pathway scale
+# ===========================================================================
+# The scales are the ONLY reconstruction-only numbers in the synapse tables.
+# Each was fixed by tuning the detailed cell to the response the point neuron
+# gives, so nS * scale reproduces the value that was in use before this was
+# made a product; the point of the product is that the NEST weight stays the
+# source of truth, including when it is zero.
+#
+# LNTBCs2MSO shares the MNTBCs2MSO scale: both are glycinergic inputs onto the
+# same soma with the same reversal and time constants, so there is no separate
+# tuning to represent. It is 0 in the NEST model and therefore 0 here.
+# Written as (tuned uS) / (NEST nS) so each scale carries the tuning it came
+# from and reproduces that value exactly, with no decimal rounding.
+SYN_SCALE = {
+    'SBCs2MSO':    0.055 / 6,      # uS/nS
+    'MNTBCs2MSO':  0.025 / 8,
+    'LNTBCs2MSO':  0.025 / 8,      # = MNTBCs2MSO; NEST weight is 0 -> 0 uS
+    'SBCs2LSO':    0.040 / 5,
+    'MNTBCs2LSO':  0.020 / 80,
+    'ANFs2GBCs':   0.005 / 5,
+    'ANFs2SBCs':   0.030 / 12,
+    'GBCs2MNTBCs': 0.050 / 30,
+    'GBCs2calyx':  0.150 / 30,     # calyx terminal, same GBC train
+}
+
+
+def syn_weight(pathway):
+    """NEURON conductance in µS for one pathway, from the live NEST weight.
+
+    Returns exactly 0.0 when the NEST model has the pathway switched off, which
+    is the whole reason this is computed rather than typed.
+    """
+    nest_ns = getattr(BRAINSTEM.SYN_WEIGHTS, pathway.replace('2calyx', '2MNTBCs')
+                      if pathway == 'GBCs2calyx' else pathway)
+    return abs(float(nest_ns)) * SYN_SCALE[pathway]
 
 
 # ===========================================================================
@@ -52,11 +105,13 @@ BODY_TEMPERATURE_C = 37.0
 # Scalp recording
 # ===========================================================================
 ELECTRODES = ('Cz', 'M1', 'M2')       # vertex and both mastoids
-DERIVATIONS = ('Cz-M1', 'Cz-M2', 'Cz-avg')
+DERIVATIONS = ('Cz-M1', 'Cz-M2', 'Cz-avg', 'FPz-M1', 'FPz-M2')
+# The FPz pair is used only by the Parkkonen et al. (2009) validation.
 
 # One band-pass per study reproduced.
 BAND_TOLNAI = (100., 1500.)     # Tolnai & Klump 2020 (MSO / LSO figures)
 BAND_CLINICAL = (150., 3000.)   # clinical BAEP standard; Curio & Weigel 1990
+BAND_NEURODIAG = (100., 3000.)  # neurodiagnostic norms; Sanfins et al. 2022
 BAND_DEFAULT = BAND_CLINICAL
 
 
@@ -116,21 +171,23 @@ MSO_SYNAPSES = {
         'tau1': BRAINSTEM.TAUS_EX_RISE.MSO,
         'tau2': BRAINSTEM.TAUS_EX_DECAY.MSO,
         'e': BRAINSTEM.EXC_REV.MSO,
-        'weight': 0.055,      # µS  reconstruction only, see module docstring
+        'weight': syn_weight('SBCs2MSO'),
     },
     'MNTBC': {
         'syntype': 'Exp2Syn',
         'tau1': BRAINSTEM.TAUS_IN_RISE.MSO,
         'tau2': BRAINSTEM.TAUS_IN_DECAY.MSO,
         'e': BRAINSTEM.INH_REV.MSO,
-        'weight': 0.025,      # µS
+        'weight': syn_weight('MNTBCs2MSO'),
     },
     'LNTBC': {
         'syntype': 'Exp2Syn',
         'tau1': BRAINSTEM.TAUS_IN_RISE.MSO,
         'tau2': BRAINSTEM.TAUS_IN_DECAY.MSO,
         'e': BRAINSTEM.INH_REV.MSO,
-        'weight': 0.025,      # µS
+        # 0 in the NEST model: this pathway is switched off there, so it is
+        # switched off here. It used to be a hand-typed 0.025 µS.
+        'weight': syn_weight('LNTBCs2MSO'),
     },
 }
 
@@ -189,14 +246,14 @@ LSO_SYNAPSES = {
         'tau1': BRAINSTEM.TAUS_EX_RISE.LSO,
         'tau2': BRAINSTEM.TAUS_EX_DECAY.LSO,
         'e': BRAINSTEM.EXC_REV.LSO,
-        'weight': 0.040,      # µS
+        'weight': syn_weight('SBCs2LSO'),
     },
     'MNTBC': {
         'syntype': 'Exp2Syn',
         'tau1': BRAINSTEM.TAUS_IN_RISE.LSO,
         'tau2': BRAINSTEM.TAUS_IN_DECAY.LSO,
         'e': BRAINSTEM.INH_REV.LSO,
-        'weight': 0.020,      # µS
+        'weight': syn_weight('MNTBCs2LSO'),
     },
 }
 LSO_CONVERGENCE = [[BRAINSTEM.POP_CONV.SBCs2LSOs, BRAINSTEM.POP_CONV.MNTBCs2LSOs]]
@@ -211,6 +268,9 @@ LSO_SPIKING_SYNAPSES = {
         'tau1': 0.1,          # ms  fast rise
         'tau2': 0.2,          # ms  fast decay, exactly one AP per input
         'e': BRAINSTEM.EXC_REV.LSO,
+        # The one conductance with no NEST counterpart, so nothing to mirror:
+        # this drives the LSO's own axon from its own spike train, a pathway
+        # the point-neuron model does not represent at all.
         'weight': 0.30,       # µS  suprathreshold (single-cell rheobase ~6 nA)
     },
 }
@@ -253,7 +313,7 @@ GBC_SYNAPSES = {
         'tau1': BRAINSTEM.TAUS_EX_RISE.GBC,
         'tau2': BRAINSTEM.TAUS_EX_DECAY.GBC,
         'e': BRAINSTEM.EXC_REV.GBC,
-        'weight': 0.005,      # µS  one of 20 endbulbs
+        'weight': syn_weight('ANFs2GBCs'),
     },
 }
 SBC_SYNAPSES = {
@@ -262,7 +322,7 @@ SBC_SYNAPSES = {
         'tau1': BRAINSTEM.TAUS_EX_RISE.SBC,
         'tau2': BRAINSTEM.TAUS_EX_DECAY.SBC,
         'e': BRAINSTEM.EXC_REV.SBC,
-        'weight': 0.030,      # µS  one of 3 large endbulbs
+        'weight': syn_weight('ANFs2SBCs'),
     },
 }
 GBC_CONVERGENCE = [[GBC_ENDBULBS]]
@@ -270,6 +330,45 @@ SBC_CONVERGENCE = [[SBC_ENDBULBS]]
 GBC_DELAYS = [BRAINSTEM.SYN_DELAYS.ANFs2GBCs]
 SBC_DELAYS = [BRAINSTEM.SYN_DELAYS.ANFs2SBCs]
 SYN_DELAY_SCALE = [None]      # no jitter on the endbulb delay
+
+# --- GBC spiking drive (the split generator, Run B) -------------------------
+# The GBC's OWN NEST output train fires its AIS, so the action potential time is
+# NEST's rather than NEURON's. Measured: driven by ANF the NEURON GBC fires only
+# 0.48x as many spikes as NEST and +0.315 ms late, and no scalar conductance
+# fixes both (count parity at x4, latency at x6, spike-time F1 peaks at x1.5).
+# Mirrors LSO_SPIKING_* -- and like it, has no NEST counterpart to mirror,
+# because a point neuron has no axon or spike-initiation zone to assign a
+# conductance to.
+GBC_SPIKING_SYNAPSES = {
+    'GBC': {
+        'syntype': 'Exp2Syn',
+        'tau1': 0.1,          # ms  fast rise
+        'tau2': 0.2,          # ms  decays before it can evoke a second spike
+        'e': BRAINSTEM.EXC_REV.GBC,
+        # Measured plateau: 0.05-0.30 uS all give exactly ONE AP, with the
+        # axon-head dipole flat to 3% and AP onset varying 0.06 ms. 0.15 is
+        # chosen because its travelling wave best matches the naturally evoked
+        # one (trunk RMS 27.23 vs 27.12 nA.um), and it sits 3x above the lowest
+        # value that still fires.
+        'weight': 0.15,       # uS
+    },
+}
+GBC_SPIKING_CONVERGENCE = [[1]]
+# ZERO, not the LSO's nominal 0.05: the trigger itself costs ~0.39 ms before the
+# AIS reaches threshold, and that floor is irreducible (swept to tau1 0.01 /
+# tau2 0.02 / 2.0 uS -- all bottom out at +0.392 ms; it is the cell's own
+# spike-initiation time). Any delay here adds to it, so spend none. The residual
+# is a CONSTANT, tight offset (IQR +0.482..+0.496 at delay 0.05), to be
+# documented rather than corrected -- shifting the saved trace would desynchronise
+# GBCspike from GBCsyn.
+GBC_SPIKING_DELAYS = [0.0]    # ms
+GBC_SPIKING_J_YX, GBC_SPIKING_TAU_YX = _bookkeeping(
+    GBC_SPIKING_SYNAPSES, ['GBC'])
+
+#: Dipole groups the split GBC generator writes, in ledger order.
+GBC_SPLIT_GROUPS = ('GBCsyn', 'GBCspike', 'GBCtrunk')
+#: The single generator the legacy lumped path writes.
+GBC_LUMPED_GROUP = 'GBC'
 
 
 # ===========================================================================
@@ -296,7 +395,7 @@ MNTB_SYNAPSES = {
         'tau1': BRAINSTEM.TAUS_EX_RISE.MNTBC,
         'tau2': BRAINSTEM.TAUS_EX_DECAY.MNTBC,
         'e': BRAINSTEM.EXC_REV.MNTBC,
-        'weight': 0.050,      # µS  suprathreshold calyx
+        'weight': syn_weight('GBCs2MNTBCs'),
     },
 }
 # The presynaptic terminal, driven suprathreshold to generate the extracellular
@@ -307,7 +406,7 @@ CALYX_SYNAPSES = {
         'tau1': BRAINSTEM.TAUS_EX_RISE.MNTBC,
         'tau2': BRAINSTEM.TAUS_EX_DECAY.MNTBC,
         'e': BRAINSTEM.EXC_REV.MNTBC,
-        'weight': 0.150,      # µS  fires the terminal once per input
+        'weight': syn_weight('GBCs2calyx'),
     },
 }
 MNTB_CONVERGENCE = [[0], [0], [BRAINSTEM.POP_CONV.GBCs2MNTBCs]]   # soma only
@@ -326,6 +425,17 @@ CALYX_DELAYS = [0.05]
 CF_MIN_HZ = 125.0
 CF_MAX_HZ = 20000.0
 N_ANF_TOTAL = BRAINSTEM.n_ANFs
+
+# Auditory-nerve generator (see docs/superpowers/specs/…-anf-wave-i-generator-design.md)
+ANF_N_BINS = 25          # ~1 mm bins over ~25 mm; K=1 reproduces a lumped dipole
+ANF_FIBER_DIAM = 3.0     # um  central axon (human morphometry: 2.0-3.75 um)
+ANF_PERIPH_DIAM = 1.5    # um  peripheral dendrite (human: 1.0-2.0 um)
+ANF_NODE_DIAM = 2.0      # um
+ANF_NODE_LEN = 1.0       # um
+ANF_INTERNODE_LEN = 300.0  # um  ~100x fibre diameter
+ANF_SOMA_DIAM = 22.0     # um  human SGN soma, unmyelinated
+ANF_V_INIT = -65.0       # mV
+ANF_CV_RANGE_MS = (10.0, 15.0)   # m/s, model-derived human range (spec 5.1)
 
 
 def _erb_number(freq_hz):
@@ -352,4 +462,5 @@ from recon_core.head_geometry import (          # noqa: E402,F401
     NUCLEUS_POS_UM, MSO_POS_UM, LSO_POS_UM, AVCN_POS_UM, SBC_POS_UM, MNTB_POS_UM,
     AVCN_AXON_TARGET, AVCN_AXON_HEAD_DIR,
     ROTATION_MSO, ROTATION_LSO, ROTATION_AVCN, ROTATION_MNTB,
+    ANF_PATH_UM, MODIOLUS_POS_UM, anf_path_binned,
 )
