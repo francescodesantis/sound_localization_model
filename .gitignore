@@ -25,3 +25,6 @@ TEMPORARY/
 data/SOFA
 reconstruction/tests/__pycache__
 external/
+reconstruction/models/AVCN/arm64
+reconstruction/models/mntb/arm64
+reconstruction/models/mso/arm64
