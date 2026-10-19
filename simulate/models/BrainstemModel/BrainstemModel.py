@@ -434,6 +434,7 @@ class BrainstemModel(SpikingModel):
                         "global_ids": self.pops[side][pop_name].get("global_id"),
                     }
                     
-        result["L"]["LSO_multimeter"] = (self.multimeters["L"]["LSO_5133"].get("events"))
+        if hasattr(self, "multimeters"):
+            result["L"]["LSO_multimeter"] = (self.multimeters["L"]["LSO_5133"].get("events"))
 
         return result
