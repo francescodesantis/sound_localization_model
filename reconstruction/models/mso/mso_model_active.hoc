@@ -1,0 +1,92 @@
+// MSO multicompartment morphology, active conductances (Klt and Ih)
+// Same morphology as mso_model.hoc; adds Kv1 and HCN channels.
+// Channel kinetics: Rothman & Manis 2003, J Neurophysiol 89:3070-3087.
+//
+// Conductance distribution (Klt/Ih from MSO literature):
+//   soma:      gbar_klt = 0.017 S/cm2 (17 mS/cm2),  gbar_ih = 0.00086 S/cm2 (0.86 mS/cm2)
+//   dendrites: gbar_klt = 0.0036 S/cm2 (3.6 mS/cm2), gbar_ih = 0.00018 S/cm2 (0.18 mS/cm2)
+//   Ih modeled as dynamic HCN (eh=-43 mV); Klt is voltage-gated (must not be frozen).
+//
+// Passive params unchanged from mso_model.hoc.
+
+create soma, dend_medial, dend_lateral
+
+access soma
+
+soma {
+    nseg = 1
+    Ra   = 150
+    cm   = 1.537
+    insert pas
+    g_pas = 1.537e-3
+    e_pas = -51.0
+    insert klt
+    gbar_klt = 0.017
+    insert ih
+    gbar_ih = 0.00086
+    ek = -77.0
+    insert nax
+    gbar_nax = 0.10
+    ena = 55.0
+    pt3dadd(0, 0, -10, 20)
+    pt3dadd(0, 0, 10, 20)
+}
+
+dend_medial {
+    nseg = 11
+    Ra   = 150
+    cm   = 1.537
+    insert pas
+    g_pas = 1.537e-3
+    e_pas = -51.0
+    insert klt
+    gbar_klt = 0.0036
+    insert ih
+    gbar_ih = 0.00018
+    ek = -77.0
+    pt3dadd(0, 0, 10, 3.5)
+    pt3dadd(0, 0, 160, 3.5)
+}
+
+dend_lateral {
+    nseg = 11
+    Ra   = 150
+    cm   = 1.537
+    insert pas
+    g_pas = 1.537e-3
+    e_pas = -51.0
+    insert klt
+    gbar_klt = 0.0036
+    insert ih
+    gbar_ih = 0.00018
+    ek = -77.0
+    pt3dadd(0, 0, -10, 3.5)
+    pt3dadd(0, 0, -160, 3.5)
+}
+
+create axon
+
+axon {
+    nseg = 5
+    Ra   = 150
+    cm   = 1.537
+    insert pas
+    g_pas = 1.537e-3
+    e_pas = -51.0
+    insert nax
+    gbar_nax = 0.35
+    ena = 55.0
+    insert klt
+    gbar_klt = 0.017
+    insert kht
+    gbar_kht = 0.015
+    insert ih
+    gbar_ih = 0.00086
+    ek = -77.0
+    pt3dadd(0, 0, -160, 1.5)
+    pt3dadd(0, 0, -310, 1.5)
+}
+
+connect dend_medial(0), soma(1)
+connect dend_lateral(0), soma(0)
+connect axon(0), dend_lateral(1)

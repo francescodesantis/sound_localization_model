@@ -1,0 +1,175 @@
+// MNTB principal-neuron multicompartment morphology, active conductances, human.
+//
+// The medial nucleus of the trapezoid body is the fast glycinergic inhibitory
+// relay of the superior olivary complex: a single giant calyx of Held, from the
+// contralateral globular bushy cell, drives each principal cell, which then
+// inhibits MSO, LSO and SPN. In humans the MNTB is a loose collection of ~3,600
+// round/oval principal neurons, 400 um lateral to the midline, spanning ~4 mm
+// rostrocaudally and coextensive with the MSO (Kulesza & Grothe 2015).
+//
+// Morphology (human principal neuron; Kulesza 2015 [2], Srinivasan 2019 [1]):
+//   soma:   spherical perikaryon, ~20 um diameter (round/oval, 85-91% of cells).
+//   dend:   1-2 short thin tufted trees. A primary dendrite (~50 um, ~3 um dia)
+//           makes two short (~10 um) branches at its distal end, with dendrite
+//           lengths of 10-80 um. Two opposed primaries are modelled here
+//           (dend_A +z, dend_B -z); see the closed-field note below.
+//   axon:   at ~90 deg to the dendrites, so with the dendrites on +/-z the AIS
+//           and axon run along -y (caudal). The axon projects ipsilaterally to
+//           MSO, LSO and SPN.
+//
+// Channel kinetics: klt, kht and ih from models/mso (Rothman & Manis 2003). Na
+//   is a dedicated MNTB fast channel, namntb (models/mntb/namntb.mod), which is
+//   R&M nax with about 3x faster inactivation recovery and a +5 mV hinf shift,
+//   so the cell phase-locks to fast calyx EPSCs at 200-400 Hz. MNTB principal
+//   cells are Kv3.1 rich (KHT, fast AP repolarisation) and express KLT (Kv1),
+//   Ih (HCN) and high somatic, AIS and nodal Na. KHT is set higher than in the
+//   LSO. The densities are literature-inspired placeholders (S/cm2), not
+//   validated for human.
+//
+// Firing. Like the other R&M nuclei here the cell is phasic to a DC step (KLT
+//   plus a brief AHP give a single onset AP). Its physiological drive is not DC
+//   but brief suprathreshold calyx EPSCs, to which it fires about one spike per
+//   event and follows high-frequency trains (validate_mntb.py). That matches
+//   how the LFP pipeline drives it, from GBC spike trains. The postsynaptic
+//   spike is not on the LFP critical path anyway, since the LFP is the calyx
+//   synaptic sink.
+//
+// Closed field. The dendrites are placed on +/-z, the probe and dendritic axis
+//   of the LFP pipeline. MNTB dendrites are short, tufted and near-radial, so
+//   opposed dend_A and dend_B receiving the same calyx drive give dipoles that
+//   largely oppose: the coherent z-dipole is deliberately weak and the field is
+//   soma dominated. That is biologically correct, since the MNTB's own
+//   somatodendritic LFP is small and wave III proper is the GBC crossing-axon
+//   volley, modelled in the AVCN pipeline (VCN_c09_extended_axon.hoc) and not
+//   re-added here.
+//
+// Passive params derived from the NEST point-neuron equivalents (params.py):
+//   MEMB_CAPS.MNTBC = 18.9 pF,  G_LEAK.MNTBC = 9 nS  (tau = C/g = 2.1 ms)
+//   Total surface area = pi*(20*20 + 2*60*3 + 20*1.8 + 100*1.5)
+//                      = 2971.9 um2 = 2.9719e-05 cm2
+//   cm    = 18.9e-12 F / 2.9719e-05 cm2 = 0.636  uF/cm2
+//   g_pas = 9e-9    S / 2.9719e-05 cm2 = 0.0003028 S/cm2
+//   (Re-derived after the tuft merge: the area is conserved to 0.1%, so C_m and
+//    g_L still match the NEST point neuron.)
+//   e_pas = -70.0 mV  (E_L.MNTBC)
+//   Ra    = 150 ohm.cm
+//
+// Conductances (S/cm2):
+//   soma:  namntb=0.12, kht=0.020, klt=0.005, ih=0.0005
+//   dend:  klt=0.003, kht=0.002, ih=0.0002                  (no Na)
+//   ais:   namntb=0.40, kht=0.020, klt=0.015
+//   axon:  namntb=0.30, kht=0.015, klt=0.010, ih=0.0003
+
+create soma, dend_A, dend_B, ais, axon
+
+access soma
+
+soma {
+    nseg = 1
+    Ra   = 150
+    cm   = 0.636
+    insert pas
+    g_pas = 0.0003028
+    e_pas = -70.0
+    insert klt
+    gbar_klt = 0.005
+    insert kht
+    gbar_kht = 0.020
+    insert ih
+    gbar_ih = 0.0005
+    insert namntb
+    gbar_namntb = 0.12
+    ena = 55.0
+    ek  = -77.0
+    pt3dadd(0, 0, -10, 20)
+    pt3dadd(0, 0,  10, 20)
+}
+
+// Primary dendrite A  (+z, 60 um, dia 3 um)
+//   60 um rather than 50 so it absorbs the two ~10 um distal tufts, which
+//   held 6% of the membrane area, received no synapses, and sat at +/-7 um
+//   in x so their dipoles cancelled.
+dend_A {
+    nseg = 5
+    Ra   = 150
+    cm   = 0.636
+    insert pas
+    g_pas = 0.0003028
+    e_pas = -70.0
+    insert klt
+    gbar_klt = 0.003
+    insert kht
+    gbar_kht = 0.002
+    insert ih
+    gbar_ih = 0.0002
+    ek = -77.0
+    pt3dadd(0, 0, 10, 3)
+    pt3dadd(0, 0, 70, 3)
+}
+
+
+// Primary dendrite B  (-z, 60 um, dia 3 um)
+dend_B {
+    nseg = 5
+    Ra   = 150
+    cm   = 0.636
+    insert pas
+    g_pas = 0.0003028
+    e_pas = -70.0
+    insert klt
+    gbar_klt = 0.003
+    insert kht
+    gbar_kht = 0.002
+    insert ih
+    gbar_ih = 0.0002
+    ek = -77.0
+    pt3dadd(0, 0, -10, 3)
+    pt3dadd(0, 0, -70, 3)
+}
+
+// Axon initial segment (-y, 20 um), at 90 deg to the dendrites; high Na
+ais {
+    nseg = 3
+    Ra   = 150
+    cm   = 0.636
+    insert pas
+    g_pas = 0.0003028
+    e_pas = -70.0
+    insert namntb
+    gbar_namntb = 0.40
+    ena = 55.0
+    insert kht
+    gbar_kht = 0.020
+    insert klt
+    gbar_klt = 0.015
+    ek = -77.0
+    pt3dadd(0,   0, 0, 1.8)
+    pt3dadd(0, -20, 0, 1.5)
+}
+
+// Axon (-y / caudal, 100 um)
+axon {
+    nseg = 3
+    Ra   = 150
+    cm   = 0.636
+    insert pas
+    g_pas = 0.0003028
+    e_pas = -70.0
+    insert namntb
+    gbar_namntb = 0.30
+    ena = 55.0
+    insert kht
+    gbar_kht = 0.015
+    insert klt
+    gbar_klt = 0.010
+    insert ih
+    gbar_ih = 0.0003
+    ek = -77.0
+    pt3dadd(0,  -20, 0, 1.5)
+    pt3dadd(0, -120, 0, 1.5)
+}
+
+connect dend_A(0),  soma(1)
+connect dend_B(0),  soma(0)
+connect ais(0),     soma(0.5)
+connect axon(0),    ais(1)

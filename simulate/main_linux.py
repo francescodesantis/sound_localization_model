@@ -33,7 +33,7 @@ MODE = "artificial_ild"   # "angle" | "artificial_itd" | "artificial_ild" | "art
 
 SEED = int(os.environ.get("SLURM_SEED", 0))   # fallback to 0 for local runs
 
-nucleus = 'LSO'
+nucleus = 'MSO'
 we = 5
 wi = -80
 d = -3

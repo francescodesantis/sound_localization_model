@@ -1,0 +1,50 @@
+// MSO multicompartment morphology for LFPy.Cell
+// Bipolar neuron: soma + dend_medial (positive z) + dend_lateral (negative z)
+//
+// Passive params derived from point-neuron equivalents:
+//   MEMB_CAPS.MSO = 70 pF,  G_LEAK.MSO = 70 pS  (tau = Cm/g = 1 ms)
+//   Total surface area = pi*(20*20 + 2*150*3.5) = 4555.2 um2 = 4.5552e-5 cm2
+//   cm    = 70e-12 F / 4.5552e-5 cm2 = 1.537 uF/cm2
+//   g_pas = 70e-9  S / 4.5552e-5 cm2 = 1.537e-3 S/cm2
+//   e_pas = -51.0 mV  (E_L.MSO)
+//   Ra    = 150 ohm.cm
+
+create soma, dend_medial, dend_lateral
+
+access soma
+
+soma {
+    nseg = 1
+    Ra   = 150
+    cm   = 1.537
+    insert pas
+    g_pas = 1.537e-3
+    e_pas = -51.0
+    pt3dadd(0, 0, -10, 20)
+    pt3dadd(0, 0, 10, 20)
+}
+
+dend_medial {
+    nseg = 11
+    Ra   = 150
+    cm   = 1.537
+    insert pas
+    g_pas = 1.537e-3
+    e_pas = -51.0
+    pt3dadd(0, 0, 10, 3.5)
+    pt3dadd(0, 0, 160, 3.5)
+}
+
+dend_lateral {
+    nseg = 11
+    Ra   = 150
+    cm   = 1.537
+    insert pas
+    g_pas = 1.537e-3
+    e_pas = -51.0
+    pt3dadd(0, 0, -10, 3.5)
+    pt3dadd(0, 0, -160, 3.5)
+}
+
+connect dend_medial(0), soma(1)
+connect dend_lateral(0), soma(0)
