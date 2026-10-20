@@ -96,18 +96,18 @@ class Parameters:
 
     @dataclass
     class SYN_WEIGHTS:
-        ANFs2SBCs: float = 12#16.0      
-        ANFs2GBCs: float = 5#3#7.0 #high
+        ANFs2SBCs: float = 12.0#16.0      
+        ANFs2GBCs: float = 5.0#3#7.0 #high
         #      
         GBCs2LNTBCs: float = 5.0
         GBCs2MNTBCs: float = 30.0 #high
         #
-        SBCs2LSO: float = 5 #0.5 #tuned for a single spike   
-        MNTBCs2LSO: float = -80 #tuned for a single spike
+        SBCs2LSO: float = 5.0 #0.5 #tuned for a single spike   
+        MNTBCs2LSO: float = -80.0 #tuned for a single spike
         #
-        SBCs2MSO: float = 6 #12.0 
-        MNTBCs2MSO: float = -8
-        LNTBCs2MSO: float = 0 
+        SBCs2MSO: float = 6.0 #12.0 
+        MNTBCs2MSO: float = -8.0
+        LNTBCs2MSO: float = 0.0 
         #
         MNTBCs2SPN: float = -40.0 
 
