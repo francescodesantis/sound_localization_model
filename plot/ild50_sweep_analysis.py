@@ -16,6 +16,10 @@ Options: --pop LSO --side L --bw 0 --n-boot 500
 
 Outputs go to <sweep_dir>/analysis/: summary.csv, and figures for one-at-a-time
 effects, tornado, seed-averaged curves, 2D grids and (with --pilot) seed count.
+If MNTBC counts were saved, also the MNTB diagnostic (mntb_*.pdf, mntb in
+summary.csv): rate-level curves of the MNTB inhibiting the analysed LSO
+(same side, driven by contra GBCs) and the shift of its half-max level
+against the shift of the LSO half-point.
 Functions can also be imported in a notebook.
 """
 import argparse
@@ -153,6 +157,31 @@ def summarize(configs, n_boot=500, baseline="baseline"):
     return pd.DataFrame(rows)
 
 
+def half_max_level(cues, rate):
+    """Level where an increasing rate-level curve first crosses (min+max)/2 (linear interpolation)."""
+    lo, hi = float(np.min(rate)), float(np.max(rate))
+    if hi <= 0 or (hi - lo) / hi < MIN_DYN_RANGE:
+        return np.nan
+    mid = (lo + hi) / 2
+    i = int(np.argmax(rate >= mid))
+    if i == 0:
+        return float(cues[0])
+    return float(np.interp(mid, [rate[i - 1], rate[i]], [cues[i - 1], cues[i]]))
+
+
+def summarize_mntb(mntb_configs, baseline="baseline"):
+    """Per config: MNTB max/min rate and half-max level of the seed-averaged curve, and its shift vs baseline."""
+    rows = []
+    for name, c in mntb_configs.items():
+        r = c["rates"].mean(axis=0)
+        rows.append({"config": name, "mntb_max_rate": float(r.max()), "mntb_min_rate": float(r.min()),
+                     "mntb_half": half_max_level(c["cues"], r)})
+    out = pd.DataFrame(rows)
+    base = out.loc[out["config"] == baseline, "mntb_half"]
+    out["delta_mntb_half"] = out["mntb_half"] - (base.iloc[0] if len(base) else np.nan)
+    return out
+
+
 def seed_count_curve(c, ns=None, n_rep=200):
     """SD of ILD50 across resamples of n seeds (with replacement): ≈ SE of ILD50 with n seeds."""
     n_tot = len(c["seeds"])
@@ -204,7 +233,9 @@ def plot_oat(df, metric="ild50"):
         b = t[t["config"] == "baseline"]
         ax.plot(b[p], b[metric], "D", color="C3", ms=6, zorder=3, label="baseline")
         ax.set_xlabel(p, fontsize=8)
-        ax.set_ylabel({"ild50": "ILD50 [dB]", "max_rate": "max rate [Hz]", "slope": "slope [dB]"}.get(metric, metric))
+        ax.set_ylabel({"ild50": "ILD50 [dB]", "max_rate": "max rate [Hz]", "slope": "slope [dB]",
+                       "mntb_half": "MNTB half-max level [dB]",
+                       "mntb_max_rate": "MNTB max rate [Hz]"}.get(metric, metric))
     axes[0].legend(fontsize=7)
     fig.tight_layout()
     return fig
@@ -229,7 +260,7 @@ def plot_tornado(df):
     return fig
 
 
-def plot_curves(configs, df):
+def plot_curves(configs, df, ylabel="rate [Hz]"):
     tables = oat_table(df)
     fig, axes = _grid(len(tables))
     for ax, (p, t) in zip(axes, tables.items()):
@@ -241,8 +272,32 @@ def plot_curves(configs, df):
                     lw=2 if is_base else 1.2, label=f"{row[p]:g}")
         ax.set_title(p, fontsize=8)
         ax.set_xlabel("contra level [dB]", fontsize=8)
-        ax.set_ylabel("rate [Hz]", fontsize=8)
+        ax.set_ylabel(ylabel, fontsize=8)
         ax.legend(fontsize=6, ncol=2)
+    fig.tight_layout()
+    return fig
+
+
+def plot_mntb_vs_lso(df):
+    """Shift of the LSO half-point vs shift of the MNTB half-max level, one point per OAT config.
+    On the identity line the parameter moves ILD50 only by moving the MNTB threshold."""
+    fig, ax = plt.subplots(figsize=(6.5, 5))
+    base_half = df.loc[df["config"] == "baseline", "half"].iloc[0]
+    tables = oat_table(df)
+    cmap = plt.get_cmap("tab20", max(len(tables), 1))
+    for i, (p, t) in enumerate(tables.items()):
+        t = t[t["config"] != "baseline"]
+        ok = t["ok"].astype(bool)
+        x, y = t["delta_mntb_half"], t["half"] - base_half
+        ax.plot(x[ok], y[ok], "o", color=cmap(i), ms=5, label=p)
+        ax.plot(x[~ok], y[~ok], "o", mfc="w", mec=cmap(i), ms=5)
+    lim = np.nanmax(np.abs(ax.get_xlim() + ax.get_ylim()))
+    ax.plot([-lim, lim], [-lim, lim], "--", color="0.5", lw=0.8, zorder=0)
+    ax.axhline(0, color="k", lw=0.5)
+    ax.axvline(0, color="k", lw=0.5)
+    ax.set_xlabel("Δ MNTB half-max level [dB]")
+    ax.set_ylabel("Δ LSO half-point [dB]  (= −ΔILD50)")
+    ax.legend(fontsize=6, bbox_to_anchor=(1.02, 1), loc="upper left")
     fig.tight_layout()
     return fig
 
@@ -315,6 +370,13 @@ if __name__ == "__main__":
         plot_seed_count(sc, args.target_se).savefig(out / "seed_count.pdf")
 
     df = summarize(configs, n_boot=args.n_boot)
+    mntb_configs = None
+    if args.pop == "LSO":
+        try:
+            mntb_configs = load_sweep(args.sweep_dir, "MNTBC", args.side, args.bw)
+            df = df.merge(summarize_mntb(mntb_configs), on="config", how="left")
+        except KeyError:
+            print("no MNTBC counts saved: skipping MNTB diagnostic")
     df.to_csv(out / "summary.csv", index=False)
     cols = ["config", "n_seeds", "ild50", "ild50_lo", "ild50_hi", "delta_ild50", "delta_lo", "delta_hi",
             "max_rate", "slope", "r2", "ok"]
@@ -325,6 +387,11 @@ if __name__ == "__main__":
             plot_oat(df, metric).savefig(out / f"oat_{metric}.pdf")
         plot_tornado(df).savefig(out / "tornado.pdf")
         plot_curves(configs, df).savefig(out / "curves.pdf")
+        if mntb_configs is not None:
+            plot_curves(mntb_configs, df, ylabel="MNTB rate [Hz]").savefig(out / "mntb_curves.pdf")
+            for metric in ("mntb_half", "mntb_max_rate"):
+                plot_oat(df, metric).savefig(out / f"oat_{metric}.pdf")
+            plot_mntb_vs_lso(df).savefig(out / "mntb_vs_lso.pdf")
     for pair, fig in plot_grids(df).items():
         fig.savefig(out / f"grid_{pair.replace(',', '__')}.pdf")
     print(f"results in {out.resolve()}")
