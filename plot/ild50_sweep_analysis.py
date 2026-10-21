@@ -12,10 +12,11 @@ share the same seeds.
 Usage (run from plot/):
     python ild50_sweep_analysis.py <sweep_dir>                 # e.g. .../ild50_sweep/oat/tone_16000Hz_60dB
     python ild50_sweep_analysis.py <sweep_dir> --pilot         # SE(ILD50) vs number of seeds
-Options: --pop LSO --side L --bw 0 --n-boot 500
+    python ild50_sweep_analysis.py <oat_dir> <oat2_dir> --out <dir>  # merge sweeps sharing seeds
+Options: --pop LSO --side L --bw 0 --n-boot 500 --split
 
 Outputs go to <sweep_dir>/analysis/: summary.csv, and figures for one-at-a-time
-effects, tornado, seed-averaged curves, 2D grids and (with --pilot) seed count.
+effects, tornado, seed-averaged curves, baseline curve with fit, 2D grids and (with --pilot) seed count.
 If MNTBC counts were saved, also the MNTB diagnostic (mntb_*.pdf, mntb in
 summary.csv): rate-level curves of the MNTB inhibiting the analysed LSO
 (same side, driven by contra GBCs) and the shift of its half-max level
@@ -38,6 +39,7 @@ from cochleas.consts import CFMAX, CFMIN
 
 R2_MIN = 0.9  # fits below this are flagged
 MIN_DYN_RANGE = 0.1  # (max-min)/max below this -> curve considered flat
+MIN_MAX_RATE = 20.0  # Hz (~1 spike per trial in 60 ms); below this the LSO is considered silent
 
 # =============================================================================
 # Loading
@@ -89,6 +91,41 @@ def load_sweep(sweep_dir, pop="LSO", side="L", bw=0):
     return configs
 
 
+def load_sweeps(sweep_dirs, pop="LSO", side="L", bw=0):
+    """load_sweep over several sweep dirs (e.g. oat + oat2) merged into one dict.
+    A config present in more than one dir (the baseline) must have identical data on the shared
+    seeds, otherwise the sweeps are not paired; its seeds are pooled. Every config gets the values
+    of all swept params (defaults filled in), so OAT tables span all sweeps."""
+    merged = {}
+    for d in sweep_dirs:
+        for name, c in load_sweep(d, pop, side, bw).items():
+            if name not in merged:
+                merged[name] = c
+                continue
+            m = merged[name]
+            common = np.intersect1d(m["seeds"], c["seeds"])
+            if not np.array_equal(m["rates"][np.searchsorted(m["seeds"], common)],
+                                  c["rates"][np.searchsorted(c["seeds"], common)]):
+                raise ValueError(f"'{name}' differs between sweeps on the shared seeds {common}: not paired")
+            new = ~np.isin(c["seeds"], m["seeds"])
+            seeds = np.concatenate([m["seeds"], c["seeds"][new]])
+            order = np.argsort(seeds)
+            m["seeds"] = seeds[order]
+            m["rates"] = np.concatenate([m["rates"], c["rates"][new]])[order]
+            m["values"] = {**c["values"], **m["values"]}
+            m["threads"] |= c["threads"]
+    # default of each swept param: its value in any config that does not override it (configs of
+    # different sweeps record different params, so the baseline alone may not list them all)
+    defaults = {}
+    for c in merged.values():
+        for k, v in c["values"].items():
+            if k not in c["overrides"]:
+                defaults.setdefault(k, v)
+    for c in merged.values():
+        c["values"] = {**defaults, **c["values"]}
+    return merged
+
+
 # =============================================================================
 # Fitting / bootstrap
 # =============================================================================
@@ -109,7 +146,8 @@ def fit_curve(cues, rate, ipsi_level):
     out.update(ild50=ipsi_level - m["ild50"], half=m["ild50"], slope=m["slope"], r2=m["r_squared"])
     flat = (out["max_rate"] - out["min_rate"]) / out["max_rate"] < MIN_DYN_RANGE
     in_range = cues.min() <= m["ild50"] <= cues.max()
-    out["ok"] = bool(in_range and not flat and m["r_squared"] >= R2_MIN)
+    silent = out["max_rate"] < MIN_MAX_RATE
+    out["ok"] = bool(in_range and not flat and not silent and m["r_squared"] >= R2_MIN)
     return out
 
 
@@ -170,16 +208,21 @@ def half_max_level(cues, rate):
 
 
 def summarize_mntb(mntb_configs, baseline="baseline"):
-    """Per config: MNTB max/min rate and half-max level of the seed-averaged curve, and its shift vs baseline."""
+    """Per config: MNTB max/min rate and half-max level of the seed-averaged curve, and its shift
+    vs the baseline computed on the seeds shared with it (paired, like delta_ild50)."""
+    base = mntb_configs.get(baseline)
     rows = []
     for name, c in mntb_configs.items():
         r = c["rates"].mean(axis=0)
-        rows.append({"config": name, "mntb_max_rate": float(r.max()), "mntb_min_rate": float(r.min()),
-                     "mntb_half": half_max_level(c["cues"], r)})
-    out = pd.DataFrame(rows)
-    base = out.loc[out["config"] == baseline, "mntb_half"]
-    out["delta_mntb_half"] = out["mntb_half"] - (base.iloc[0] if len(base) else np.nan)
-    return out
+        row = {"config": name, "mntb_max_rate": float(r.max()), "mntb_min_rate": float(r.min()),
+               "mntb_half": half_max_level(c["cues"], r), "delta_mntb_half": np.nan}
+        if base is not None:
+            common = np.intersect1d(c["seeds"], base["seeds"])
+            sub = c["rates"][np.searchsorted(c["seeds"], common)].mean(axis=0)
+            ref = base["rates"][np.searchsorted(base["seeds"], common)].mean(axis=0)
+            row["delta_mntb_half"] = half_max_level(c["cues"], sub) - half_max_level(base["cues"], ref)
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def seed_count_curve(c, ns=None, n_rep=200):
@@ -218,64 +261,117 @@ def oat_table(df):
     return out
 
 
+def _draw_oat(ax, p, t, metric):
+    ok = t["ok"].astype(bool)
+    y = t[metric].astype(float)
+    ax.plot(t[p][ok], y[ok], "-", color="k", lw=1, zorder=1)
+    if metric == "ild50":
+        g = t[ok]
+        yerr = np.vstack([g[metric] - g["ild50_lo"], g["ild50_hi"] - g[metric]])
+        ax.errorbar(g[p], g[metric], yerr=yerr, fmt="none", ecolor="k", lw=1, capsize=2, zorder=1)
+        span = pd.concat([g["ild50_lo"], g["ild50_hi"]])
+    else:
+        span = y[ok]
+    # y range from the valid fits only; flagged points outside it are pinned to the edge (triangles)
+    if span.notna().any():
+        lo, hi = np.nanmin(span), np.nanmax(span)
+        pad = 0.1 * (hi - lo) if hi > lo else 1.0
+        lo, hi = lo - pad, hi + pad
+        ax.set_ylim(lo, hi)
+        bad = ~ok & y.notna()
+        below, above = bad & (y < lo), bad & (y > hi)
+        ax.plot(t[p][below], np.full(below.sum(), lo), "v", mfc="w", mec="k", ms=6, clip_on=False, zorder=2)
+        ax.plot(t[p][above], np.full(above.sum(), hi), "^", mfc="w", mec="k", ms=6, clip_on=False, zorder=2)
+    ax.plot(t[p][ok], y[ok], "o", color="k", ms=4, zorder=2)
+    ax.plot(t[p][~ok], y[~ok], "o", mfc="w", mec="k", ms=4, zorder=2, label="flagged fit")
+    b = t[t["config"] == "baseline"]
+    ax.plot(b[p], b[metric], "D", color="C3", ms=6, zorder=3, label="baseline")
+    ax.set_xlabel(p, fontsize=8)
+    ax.set_ylabel({"ild50": "ILD50 [dB]", "max_rate": "max rate [Hz]", "slope": "slope [dB]",
+                   "mntb_half": "MNTB half-max level [dB]",
+                   "mntb_max_rate": "MNTB max rate [Hz]"}.get(metric, metric))
+
+
 def plot_oat(df, metric="ild50"):
     tables = oat_table(df)
     fig, axes = _grid(len(tables))
     for ax, (p, t) in zip(axes, tables.items()):
-        ok = t["ok"].astype(bool)
-        if metric == "ild50":
-            yerr = np.vstack([t[metric] - t["ild50_lo"], t["ild50_hi"] - t[metric]])
-            ax.errorbar(t[p], t[metric], yerr=yerr, fmt="-", color="k", lw=1, capsize=2, zorder=1)
-        else:
-            ax.plot(t[p], t[metric], "-", color="k", lw=1, zorder=1)
-        ax.plot(t[p][ok], t[metric][ok], "o", color="k", ms=4, zorder=2)
-        ax.plot(t[p][~ok], t[metric][~ok], "o", mfc="w", mec="k", ms=4, zorder=2, label="flagged fit")
-        b = t[t["config"] == "baseline"]
-        ax.plot(b[p], b[metric], "D", color="C3", ms=6, zorder=3, label="baseline")
-        ax.set_xlabel(p, fontsize=8)
-        ax.set_ylabel({"ild50": "ILD50 [dB]", "max_rate": "max rate [Hz]", "slope": "slope [dB]",
-                       "mntb_half": "MNTB half-max level [dB]",
-                       "mntb_max_rate": "MNTB max rate [Hz]"}.get(metric, metric))
+        _draw_oat(ax, p, t, metric)
     axes[0].legend(fontsize=7)
     fig.tight_layout()
     return fig
 
 
 def plot_tornado(df):
+    """ΔILD50 at the lowest/highest tested value with a valid fit (flagged fits are excluded,
+    and listed in the label), with paired 95% CI whiskers."""
     rows = []
     for p, t in oat_table(df).items():
         t = t[t["config"] != "baseline"]
-        lo, hi = t.iloc[0], t.iloc[-1]  # smallest / largest tested value
-        rows.append((p, lo["delta_ild50"], hi["delta_ild50"], lo[p], hi[p]))
-    rows.sort(key=lambda r: np.nanmax(np.abs(r[1:3])))
-    fig, ax = plt.subplots(figsize=(7, 0.45 * len(rows) + 1))
+        good = t[t["ok"].astype(bool)]
+        bad = t[~t["ok"].astype(bool)][p]
+        if good.empty:
+            continue
+        lo, hi = good.iloc[0], good.iloc[-1]  # smallest / largest value with a valid fit
+        label = f"{p}  [{lo[p]:g} … {hi[p]:g}]"
+        if len(bad):
+            label += "  ✕ fails at " + ", ".join(f"{v:g}" for v in bad)
+        rows.append((label, lo, hi))
+    rows.sort(key=lambda r: np.nanmax(np.abs([r[1]["delta_ild50"], r[2]["delta_ild50"]])))
+    fig, ax = plt.subplots(figsize=(8, 0.5 * len(rows) + 1.2))
     y = np.arange(len(rows))
-    ax.barh(y, [r[1] for r in rows], color="C0", label="lowest value")
-    ax.barh(y, [r[2] for r in rows], color="C3", alpha=0.7, label="highest value")
-    ax.set_yticks(y, [f"{r[0]}  [{r[3]:g} … {r[4]:g}]" for r in rows], fontsize=8)
+    for off, k, color, name in ((-0.2, 1, "C0", "lowest valid value"), (0.2, 2, "C3", "highest valid value")):
+        d = np.array([r[k]["delta_ild50"] for r in rows])
+        err = np.vstack([d - [r[k]["delta_lo"] for r in rows], [r[k]["delta_hi"] for r in rows] - d])
+        ax.barh(y + off, d, height=0.4, color=color, label=name)
+        ax.errorbar(d, y + off, xerr=err, fmt="none", ecolor="k", lw=0.8, capsize=2)
+    ax.set_yticks(y, [r[0] for r in rows], fontsize=8)
     ax.axvline(0, color="k", lw=0.8)
-    ax.set_xlabel("ΔILD50 vs baseline [dB]")
-    ax.legend(fontsize=8)
+    ax.set_xlabel("ΔILD50 vs baseline [dB]", fontsize=11)
+    ax.set_title("whiskers: paired 95% CI;  ✕: values with failed fit (excluded)", fontsize=8)
+    ax.legend(fontsize=8, loc="lower right")
     fig.tight_layout()
     return fig
+
+
+def _draw_curves(ax, p, t, configs, ylabel):
+    cmap = plt.get_cmap("viridis", len(t))
+    for i, (_, row) in enumerate(t.iterrows()):
+        c = configs[row["config"]]
+        is_base = row["config"] == "baseline"
+        ax.plot(c["cues"], c["rates"].mean(axis=0), "-", color="C3" if is_base else cmap(i),
+                lw=2 if is_base else 1.2, label=f"{row[p]:g}")
+    ax.set_title(p, fontsize=8)
+    ax.set_xlabel("contra level [dB]", fontsize=8)
+    ax.set_ylabel(ylabel, fontsize=8)
+    ax.legend(fontsize=6, ncol=2)
 
 
 def plot_curves(configs, df, ylabel="rate [Hz]"):
     tables = oat_table(df)
     fig, axes = _grid(len(tables))
     for ax, (p, t) in zip(axes, tables.items()):
-        cmap = plt.get_cmap("viridis", len(t))
-        for i, (_, row) in enumerate(t.iterrows()):
-            c = configs[row["config"]]
-            is_base = row["config"] == "baseline"
-            ax.plot(c["cues"], c["rates"].mean(axis=0), "-", color="C3" if is_base else cmap(i),
-                    lw=2 if is_base else 1.2, label=f"{row[p]:g}")
-        ax.set_title(p, fontsize=8)
-        ax.set_xlabel("contra level [dB]", fontsize=8)
-        ax.set_ylabel(ylabel, fontsize=8)
-        ax.legend(fontsize=6, ncol=2)
+        _draw_curves(ax, p, t, configs, ylabel)
     fig.tight_layout()
     return fig
+
+
+def save_split(df, folder, draw, legend=False, dpi=200):
+    """One PNG per OAT parameter in `folder` (same panel as the grid figure): draw(ax, param, table)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    for p, t in oat_table(df).items():
+        fig, ax = plt.subplots(figsize=(4.5, 3.5))
+        draw(ax, p, t)
+        # the grid panels use small hard-coded label sizes: make single panels uniform
+        for txt in (ax.xaxis.label, ax.yaxis.label, ax.title):
+            txt.set_fontsize(11)
+            txt.set_fontweight("normal")
+        ax.tick_params(labelsize=10)
+        if legend:
+            ax.legend(fontsize=7)
+        fig.tight_layout()
+        fig.savefig(folder / f"{p}.png", dpi=dpi)
+        plt.close(fig)
 
 
 def plot_mntb_vs_lso(df):
@@ -284,13 +380,14 @@ def plot_mntb_vs_lso(df):
     fig, ax = plt.subplots(figsize=(6.5, 5))
     base_half = df.loc[df["config"] == "baseline", "half"].iloc[0]
     tables = oat_table(df)
-    cmap = plt.get_cmap("tab20", max(len(tables), 1))
+    cmap = plt.get_cmap("tab20")
     for i, (p, t) in enumerate(tables.items()):
         t = t[t["config"] != "baseline"]
         ok = t["ok"].astype(bool)
         x, y = t["delta_mntb_half"], t["half"] - base_half
-        ax.plot(x[ok], y[ok], "o", color=cmap(i), ms=5, label=p)
-        ax.plot(x[~ok], y[~ok], "o", mfc="w", mec=cmap(i), ms=5)
+        color, marker = cmap(i % 20), "osD^"[i // 20 % 4]  # tab20 has 20 colours: change marker after
+        ax.plot(x[ok], y[ok], marker, color=color, ms=5, label=p)
+        ax.plot(x[~ok], y[~ok], marker, mfc="w", mec=color, ms=5)
     lim = np.nanmax(np.abs(ax.get_xlim() + ax.get_ylim()))
     ax.plot([-lim, lim], [-lim, lim], "--", color="0.5", lw=0.8, zorder=0)
     ax.axhline(0, color="k", lw=0.5)
@@ -327,6 +424,31 @@ def plot_grids(df):
     return figs
 
 
+def plot_baseline_curve(c, title="baseline"):
+    """Rate vs contra level: single seeds (thin), seed mean ± SEM, sigmoid fit and ILD50."""
+    rates, cues = c["rates"], c["cues"]
+    mean = rates.mean(axis=0)
+    sem = rates.std(axis=0, ddof=1) / np.sqrt(len(rates)) if len(rates) > 1 else np.zeros_like(mean)
+    fig, ax = plt.subplots(figsize=(5.5, 4))
+    for r in rates:
+        ax.plot(cues, r, "-", color="0.8", lw=0.6, zorder=1)
+    ax.errorbar(cues, mean, yerr=sem, fmt="o", color="k", ms=4, capsize=2, zorder=3,
+                label=f"mean ± SEM ({len(rates)} seeds)")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        m = extract_ild50_metrics(cues, mean, normalize=False)
+    x = np.linspace(cues.min(), cues.max(), 300)
+    ax.plot(x, m["fit_curve_fn"](x), "-", color="C3", lw=1.5, zorder=2, label="sigmoid fit")
+    ax.axvline(m["ild50"], color="C3", ls="--", lw=1)
+    ax.set_title(f"{title}: ILD50 = {c['ipsi_level'] - m['ild50']:.1f} dB "
+                 f"(half-point {m['ild50']:.1f} dB, ipsi {c['ipsi_level']:g} dB)", fontsize=9)
+    ax.set_xlabel("contra level [dB]", fontsize=11)
+    ax.set_ylabel(f"LSO rate [Hz]  (CF {c['cf_hz']:.0f} Hz)", fontsize=11)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
 def plot_seed_count(sc, target_se=None):
     fig, ax = plt.subplots(figsize=(4.5, 3.2))
     ax.plot(sc["n_seeds"], sc["se_ild50"], "o-", color="k")
@@ -345,18 +467,23 @@ def plot_seed_count(sc, target_se=None):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("sweep_dir")
+    ap.add_argument("sweep_dirs", nargs="+", help="one sweep dir, or several to merge (e.g. oat and oat2)")
+    ap.add_argument("--out", help="output dir (default <sweep_dir>/analysis; required when merging)")
     ap.add_argument("--pop", default="LSO")
     ap.add_argument("--side", default="L")
     ap.add_argument("--bw", type=int, default=0, help="neighbouring neurons on each side of the target CF")
     ap.add_argument("--n-boot", type=int, default=500)
     ap.add_argument("--pilot", action="store_true", help="SE(ILD50) vs number of seeds for the baseline")
     ap.add_argument("--target-se", type=float, default=1.0, help="dB, used by --pilot")
+    ap.add_argument("--split", action="store_true",
+                    help="also save every OAT panel as its own PNG, in one folder per figure")
     args = ap.parse_args()
 
-    out = Path(args.sweep_dir) / "analysis"
-    out.mkdir(exist_ok=True)
-    configs = load_sweep(args.sweep_dir, args.pop, args.side, args.bw)
+    if len(args.sweep_dirs) > 1 and not args.out:
+        ap.error("--out is required when merging several sweep dirs")
+    out = Path(args.out) if args.out else Path(args.sweep_dirs[0]) / "analysis"
+    out.mkdir(parents=True, exist_ok=True)
+    configs = load_sweeps(args.sweep_dirs, args.pop, args.side, args.bw)
     print(f"loaded {len(configs)} configs, seeds per config: "
           f"{sorted({len(c['seeds']) for c in configs.values()})}")
 
@@ -370,10 +497,12 @@ if __name__ == "__main__":
         plot_seed_count(sc, args.target_se).savefig(out / "seed_count.pdf")
 
     df = summarize(configs, n_boot=args.n_boot)
+    if "baseline" in configs:
+        plot_baseline_curve(configs["baseline"]).savefig(out / "baseline_curve.png", dpi=200)
     mntb_configs = None
     if args.pop == "LSO":
         try:
-            mntb_configs = load_sweep(args.sweep_dir, "MNTBC", args.side, args.bw)
+            mntb_configs = load_sweeps(args.sweep_dirs, "MNTBC", args.side, args.bw)
             df = df.merge(summarize_mntb(mntb_configs), on="config", how="left")
         except KeyError:
             print("no MNTBC counts saved: skipping MNTB diagnostic")
@@ -383,15 +512,25 @@ if __name__ == "__main__":
     print(df[[c for c in cols if c in df]].round(2).to_string(index=False))
 
     if any(v and "," not in v for v in df["varied"]):
-        for metric in ("ild50", "max_rate", "slope"):
+        metrics = ["ild50", "max_rate", "slope"] + (["mntb_half", "mntb_max_rate"] if mntb_configs is not None else [])
+        for metric in metrics:
             plot_oat(df, metric).savefig(out / f"oat_{metric}.pdf")
         plot_tornado(df).savefig(out / "tornado.pdf")
         plot_curves(configs, df).savefig(out / "curves.pdf")
         if mntb_configs is not None:
             plot_curves(mntb_configs, df, ylabel="MNTB rate [Hz]").savefig(out / "mntb_curves.pdf")
-            for metric in ("mntb_half", "mntb_max_rate"):
-                plot_oat(df, metric).savefig(out / f"oat_{metric}.pdf")
             plot_mntb_vs_lso(df).savefig(out / "mntb_vs_lso.pdf")
+        if args.split:
+            for metric in metrics:
+                save_split(df, out / f"oat_{metric}", lambda ax, p, t, m=metric: _draw_oat(ax, p, t, m), legend=True)
+            save_split(df, out / "curves", lambda ax, p, t: _draw_curves(ax, p, t, configs, "rate [Hz]"))
+            if mntb_configs is not None:
+                save_split(df, out / "mntb_curves",
+                           lambda ax, p, t: _draw_curves(ax, p, t, mntb_configs, "MNTB rate [Hz]"))
+            for name, fig in (("tornado", plot_tornado(df)),) + (
+                    (("mntb_vs_lso", plot_mntb_vs_lso(df)),) if mntb_configs is not None else ()):
+                (out / name).mkdir(exist_ok=True)
+                fig.savefig(out / name / f"{name}.png", dpi=200)
     for pair, fig in plot_grids(df).items():
         fig.savefig(out / f"grid_{pair.replace(',', '__')}.pdf")
     print(f"results in {out.resolve()}")
