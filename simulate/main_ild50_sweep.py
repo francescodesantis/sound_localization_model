@@ -10,6 +10,10 @@ Usage (run from simulate/):
     python main_ild50_sweep.py prefetch --sweep oat --seed 3
     python main_ild50_sweep.py run      --sweep oat --chunk 7 --chunk-size 10 [--threads 14]
 
+Sweeps with "timing": True also save, for the left LSO neuron with CF closest to
+the tone, its g_ex/g_in traces and the spikes of its input tree (SBC, MNTBC,
+contra GBC, ipsi/contra ANF), used to measure exc/inh arrival times.
+
 `prefetch` runs the cochlea for one seed (no NEST import; the cochlea must run
 before `import nest` on Linux). `run` only reads the ANF cache; tasks whose
 output already exists are skipped, so failed/timed-out arrays can simply be
@@ -32,6 +36,7 @@ from utils.log_utils import logger
 from utils.path_utils import Paths, save_current_conf
 from utils.custom_sounds import Tone
 from utils.anf_utils import ZI_COC_KEY, create_sound_key, load_anf_response
+from utils.cochlea_utils import CFMAX, CFMIN
 from models.BrainstemModel.params import Parameters as params
 import ild50_sweep_config as C
 
@@ -177,9 +182,45 @@ def cmd_prefetch(args):
     logger.info("=== prefetch complete ===")
 
 
-def run_task(Model, nest, tone, eff, seed, path, threads, save_full, value_paths):
+def target_lso_index(n_neurons, freq_hz):
+    """Index of the neuron with CF closest to freq_hz, as select_neurons() in plot/ild50_sweep_analysis.py
+    (Greenwood human map over CFMIN..CFMAX, same as plot/analyze/report.greenwood_cf_array)."""
+    A, a = 165.4, 2.1
+    x = np.linspace(*(np.log10(np.array([CFMIN / b2.Hz, CFMAX / b2.Hz]) / A + 1) / a), n_neurons)
+    cf = A * (10 ** (a * x) - 1)
+    pos = int(np.searchsorted(cf, freq_hz))
+    if pos in (0, n_neurons):
+        return min(pos, n_neurons - 1)
+    return pos if cf[pos] - freq_hz < freq_hz - cf[pos - 1] else pos - 1
+
+
+def attach_timing(nest, model, lso_idx):
+    """Record g_ex/g_in of one left LSO neuron and find its input tree (TIMING_TREE): the SBCs and
+    MNTBCs projecting onto it, the contra GBCs driving those MNTBCs and the ANFs driving SBCs/GBCs.
+    Returns ({tree name: pop-relative indices}, multimeter). Devices are created after the network,
+    so population ids and dynamics are unchanged."""
+    pops = model.pops
+    nodes = {"LSO": pops["L"]["LSO"][lso_idx]}
+
+    def sources(target, side, pop):
+        gids = np.atleast_1d(nest.GetConnections(source=pops[side][pop], target=target).get("source"))
+        return nest.NodeCollection(sorted(set(int(g) for g in gids)))
+
+    for name, (side, pop, target) in C.TIMING_TREE.items():
+        nodes[name] = sources(nodes[target], side, pop)
+    idx = {name: np.asarray(n.get("global_id"), dtype=np.int64).ravel()
+           - int(pops[C.TIMING_POPS[name][0]][C.TIMING_POPS[name][1]][0].get("global_id"))
+           for name, n in nodes.items()}
+    mm = nest.Create("multimeter", params={"record_from": ["g_ex", "g_in"], "interval": C.TIMING_INTERVAL_MS})
+    nest.Connect(mm, nodes["LSO"])
+    return idx, mm
+
+
+def run_task(Model, nest, tone, eff, seed, path, threads, save_full, value_paths, timing=False):
     p = make_params(eff, seed, threads)
     counts = {}
+    tree_idx, tree_spikes, g = None, {}, {"g_ex": [], "g_in": []}
+    lso_idx = target_lso_index(p.POP_NUM.n_LSOs, float(tone.frequency / b2.Hz)) if timing else None
     ipsi_level, contra_level = None, []
     cue_to_rate, L_sounds, R_sounds = {}, {}, {}
 
@@ -192,8 +233,25 @@ def run_task(Model, nest, tone, eff, seed, path, threads, save_full, value_paths
         contra_level.append(float(anf.right_sound.level))
 
         model = Model(p, anf)
+        if timing:
+            tree_idx, mm = attach_timing(nest, model, lso_idx)
         model.simulate(C.TIME_SIMULATION)
         result = model.analyze()
+
+        if timing:
+            ev = mm.get("events")
+            t_mm = np.asarray(ev["times"])
+            for k in g:
+                g[k].append(np.asarray(ev[k], dtype=np.float32))
+            for name, rel in tree_idx.items():
+                side, pop = C.TIMING_POPS[name]
+                e = result[side][pop]
+                pos = np.asarray(e["senders"], dtype=np.int64) - int(np.atleast_1d(e["global_ids"])[0])
+                keep = np.isin(pos, rel)
+                s = tree_spikes.setdefault(name, {"times": [], "neuron": [], "level": []})
+                s["times"].append(np.asarray(e["times"])[keep].astype(np.float32))
+                s["neuron"].append(np.searchsorted(rel, pos[keep]).astype(np.uint16))
+                s["level"].append(np.full(keep.sum(), i, dtype=np.uint8))
 
         for side in SIDES:
             for pop in C.SAVE_POPS:
@@ -209,6 +267,15 @@ def run_task(Model, nest, tone, eff, seed, path, threads, save_full, value_paths
             cue_to_rate[val] = result
             L_sounds[val], R_sounds[val] = anf.left_sound, anf.right_sound
 
+    timing_arrays = {}
+    if timing:
+        # one LSO neuron: conductances (levels x samples); input tree: pop-relative ids and the
+        # spikes of each tree population, flattened with their tree-neuron and contra-level index
+        timing_arrays = {"timing_t": t_mm.astype(np.float32),
+                         **{f"timing_{k}": np.stack(v) for k, v in g.items()},
+                         **{f"timing_idx_{n}": v for n, v in tree_idx.items()},
+                         **{f"timing_{n}_{k}": np.concatenate(v) for n, s in tree_spikes.items() for k, v in s.items()}}
+
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.stem}.tmp.npz")
     np.savez_compressed(
@@ -223,6 +290,7 @@ def run_task(Model, nest, tone, eff, seed, path, threads, save_full, value_paths
         overrides=json.dumps(eff),
         values=json.dumps({k: _get(p, k) for k in value_paths}),
         **{f"counts_{k}": v for k, v in counts.items()},
+        **timing_arrays,
     )
     os.replace(tmp, path)
 
@@ -258,7 +326,7 @@ def cmd_run(args):
         start = timer()
         logger.info(f">>>>> {name} | seed {seed}")
         run_task(BrainstemModel, nest, tone, eff, seed, out_file(root, name, seed),
-                 args.threads, args.save_full, sweep_paths(args.sweep))
+                 args.threads, args.save_full, sweep_paths(args.sweep), C.SWEEPS[args.sweep].get("timing", False))
         logger.info(f"done in {timedelta(seconds=timer() - start)}")
 
 

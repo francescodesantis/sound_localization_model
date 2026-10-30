@@ -56,7 +56,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.SBC,
                     "g_L": P.G_LEAK.SBC,
-                    "E_L": P.E_L.SBC,                                
+                    "E_L": P.E_L.SBC,
+                    "V_m": P.E_L.SBC,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.SBC,
                     "V_th": P.V_TH.SBC,           
                     "t_ref": P.T_REF.SBC,         
@@ -76,7 +77,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.GBC,
                     "g_L": P.G_LEAK.GBC,
-                    "E_L": P.E_L.GBC,                                
+                    "E_L": P.E_L.GBC,
+                    "V_m": P.E_L.GBC,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.GBC,
                     "V_th": P.V_TH.GBC,           
                     "t_ref": P.T_REF.GBC,         
@@ -96,7 +98,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.LNTBC,
                     "g_L": P.G_LEAK.LNTBC,
-                    "E_L": P.E_L.LNTBC,                                
+                    "E_L": P.E_L.LNTBC,
+                    "V_m": P.E_L.LNTBC,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.LNTBC,
                     "V_th": P.V_TH.LNTBC,           
                     "t_ref": P.T_REF.LNTBC,         
@@ -116,7 +119,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.MNTBC,
                     "g_L": P.G_LEAK.MNTBC,
-                    "E_L": P.E_L.MNTBC,                                
+                    "E_L": P.E_L.MNTBC,
+                    "V_m": P.E_L.MNTBC,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.MNTBC,
                     "V_th": P.V_TH.MNTBC,           
                     "t_ref": P.T_REF.MNTBC,         
@@ -136,7 +140,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.MSO,
                     "g_L": P.G_LEAK.MSO,
-                    "E_L": P.E_L.MSO,                                
+                    "E_L": P.E_L.MSO,
+                    "V_m": P.E_L.MSO,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.MSO,
                     "V_th": P.V_TH.MSO,           
                     "t_ref": P.T_REF.MSO,         
@@ -158,7 +163,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.LSO,
                     "g_L": P.G_LEAK.LSO,
-                    "E_L": P.E_L.LSO,                                
+                    "E_L": P.E_L.LSO,
+                    "V_m": P.E_L.LSO,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.LSO,
                     "V_th": P.V_TH.LSO,           
                     "t_ref": P.T_REF.LSO,         

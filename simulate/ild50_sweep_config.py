@@ -32,6 +32,18 @@ CONTRA_LEVELS = np.linspace(0, 90, 19)
 # MNTBC is kept to diagnose whether a parameter acts through inhibition.
 SAVE_POPS = ["LSO", "MNTBC"]
 
+# Timing recording (sweeps with "timing": True): input tree of the analysed left LSO neuron.
+# name -> (side, population, tree node it projects onto); built in this order.
+TIMING_TREE = {
+    "SBC": ("L", "SBC", "LSO"),
+    "MNTBC": ("L", "MNTBC", "LSO"),
+    "GBC": ("R", "GBC", "MNTBC"),  # contra GBCs drive the left MNTB
+    "ANF_ipsi": ("L", "parrot_ANF", "SBC"),
+    "ANF_contra": ("R", "parrot_ANF", "GBC"),
+}
+TIMING_POPS = {"LSO": ("L", "LSO"), **{k: v[:2] for k, v in TIMING_TREE.items()}}
+TIMING_INTERVAL_MS = 0.02  # multimeter sampling of g_ex/g_in
+
 # =============================================================================
 # Helpers to build sweeps
 # =============================================================================
@@ -89,6 +101,25 @@ _B = {
 
 _MUL = [0.5, 0.75, 1.25, 1.5, 2.0]
 
+
+def dt_config(dt, shift=0.0):
+    """Delays giving dt_syn = (inhibitory - excitatory path synaptic delays) onto the LSO, in ms.
+
+    Convention: dt < 0 inhibition leads, dt > 0 excitation leads. Synaptic delays only: the
+    integration times of SBC/GBC/MNTB and the ANF latencies are added by the network and are
+    measured from the timing recordings. Only the final synapse of one branch is lengthened
+    (never shortened below baseline): later inhibition -> MNTBCs2LSO, later excitation -> SBCs2LSO.
+    `shift` is added to both branches and must leave the LSO response unchanged.
+    """
+    d_exc = _B["SYN_DELAYS.ANFs2SBCs"] + _B["SYN_DELAYS.SBCs2LSO"]  # 2.5 ms
+    d_inh = _B["SYN_DELAYS.ANFs2GBCs"] + _B["SYN_DELAYS.GBCs2MNTBCs"] + _B["SYN_DELAYS.MNTBCs2LSO"]  # 1.78 ms
+    extra = round(dt - (d_inh - d_exc), 3)  # inhibition later than at baseline (dt_syn = -0.72 ms)
+    return {"SYN_DELAYS.SBCs2LSO": round(_B["SYN_DELAYS.SBCs2LSO"] + max(-extra, 0) + shift, 3),
+            "SYN_DELAYS.MNTBCs2LSO": round(_B["SYN_DELAYS.MNTBCs2LSO"] + max(extra, 0) + shift, 3)}
+
+
+_DT_GRID = np.round(np.arange(-2.0, 1.2501, 0.125), 3)
+
 # =============================================================================
 # Sweeps
 # =============================================================================
@@ -139,6 +170,18 @@ SWEEPS = {
         # rise must stay below the 0.5 ms decay (iaf_cond_beta)
         + oat("TAUS_EX_RISE.LSO", scaled(_B["TAUS_EX_RISE.LSO"], [0.25, 0.5, 1.5, 2.0]))
         + oat("TAUS_IN_RISE.LSO", scaled(_B["TAUS_IN_RISE.LSO"], [0.25, 0.5, 1.5, 2.0])),
+    },
+    # Relative exc/inh timing: ILD50 vs dt_syn on a fine grid (baseline dt_syn = -0.72 ms).
+    "dt": {
+        "n_seeds": 10,
+        "timing": True,
+        "configs": [BASELINE] + [dt_config(t) for t in _DT_GRID],
+    },
+    # Control: a common shift of both branches must give spike counts identical to shift 0.
+    "dt_invariance": {
+        "n_seeds": 10,
+        "timing": True,
+        "configs": [dt_config(t, c) for t in (-1.72, -0.72, 0.28) for c in (0.0, -0.25, 0.25, 0.5, 1.0)],
     },
     # Stage 2: E/I grid (tests whether ILD50 depends only on the I/E ratio).
     # Edit the axes after looking at the OAT results.
