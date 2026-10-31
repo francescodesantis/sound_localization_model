@@ -174,14 +174,20 @@ SWEEPS = {
     # Relative exc/inh timing: ILD50 vs dt_syn on a fine grid (baseline dt_syn = -0.72 ms).
     "dt": {
         "n_seeds": 10,
-        "timing": True,
         "configs": [BASELINE] + [dt_config(t) for t in _DT_GRID],
     },
     # Control: a common shift of both branches must give spike counts identical to shift 0.
     "dt_invariance": {
         "n_seeds": 10,
-        "timing": True,
         "configs": [dt_config(t, c) for t in (-1.72, -0.72, 0.28) for c in (0.0, -0.25, 0.25, 0.5, 1.0)],
+    },
+    # dt_eff(L) measured on the baseline; the network is feedforward, so for any other delay config
+    # dt_eff = baseline dt_eff + (dt_syn - baseline dt_syn). The two extremes of the dt grid check it.
+    # Same config names as in "dt", so the shared spike counts are cross-checked when merged.
+    "dt_timing": {
+        "n_seeds": 10,
+        "timing": True,
+        "configs": [BASELINE, dt_config(_DT_GRID[0]), dt_config(_DT_GRID[-1])],
     },
     # Stage 2: E/I grid (tests whether ILD50 depends only on the I/E ratio).
     # Edit the axes after looking at the OAT results.

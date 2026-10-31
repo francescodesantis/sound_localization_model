@@ -194,11 +194,11 @@ def target_lso_index(n_neurons, freq_hz):
     return pos if cf[pos] - freq_hz < freq_hz - cf[pos - 1] else pos - 1
 
 
-def attach_timing(nest, model, lso_idx):
-    """Record g_ex/g_in of one left LSO neuron and find its input tree (TIMING_TREE): the SBCs and
-    MNTBCs projecting onto it, the contra GBCs driving those MNTBCs and the ANFs driving SBCs/GBCs.
-    Returns ({tree name: pop-relative indices}, multimeter). Devices are created after the network,
-    so population ids and dynamics are unchanged."""
+def input_tree(nest, model, lso_idx):
+    """Input tree (TIMING_TREE) of one left LSO neuron: the SBCs and MNTBCs projecting onto it, the
+    contra GBCs driving those MNTBCs and the ANFs driving SBCs/GBCs. Returns {tree name: pop-relative
+    indices}. Call it after Simulate: GetConnections before Simulate slows NEST down several times.
+    Connectivity depends only on the seed, so the tree is the same at every contra level."""
     pops = model.pops
     nodes = {"LSO": pops["L"]["LSO"][lso_idx]}
 
@@ -208,12 +208,17 @@ def attach_timing(nest, model, lso_idx):
 
     for name, (side, pop, target) in C.TIMING_TREE.items():
         nodes[name] = sources(nodes[target], side, pop)
-    idx = {name: np.asarray(n.get("global_id"), dtype=np.int64).ravel()
-           - int(pops[C.TIMING_POPS[name][0]][C.TIMING_POPS[name][1]][0].get("global_id"))
-           for name, n in nodes.items()}
+    return {name: np.asarray(n.get("global_id"), dtype=np.int64).ravel()
+            - int(pops[C.TIMING_POPS[name][0]][C.TIMING_POPS[name][1]][0].get("global_id"))
+            for name, n in nodes.items()}
+
+
+def record_conductances(nest, model, lso_idx):
+    """Multimeter on g_ex/g_in of one left LSO neuron. Created after the network, so population ids
+    and dynamics are unchanged."""
     mm = nest.Create("multimeter", params={"record_from": ["g_ex", "g_in"], "interval": C.TIMING_INTERVAL_MS})
-    nest.Connect(mm, nodes["LSO"])
-    return idx, mm
+    nest.Connect(mm, model.pops["L"]["LSO"][lso_idx])
+    return mm
 
 
 def run_task(Model, nest, tone, eff, seed, path, threads, save_full, value_paths, timing=False):
@@ -234,11 +239,13 @@ def run_task(Model, nest, tone, eff, seed, path, threads, save_full, value_paths
 
         model = Model(p, anf)
         if timing:
-            tree_idx, mm = attach_timing(nest, model, lso_idx)
+            mm = record_conductances(nest, model, lso_idx)
         model.simulate(C.TIME_SIMULATION)
         result = model.analyze()
 
         if timing:
+            if tree_idx is None:
+                tree_idx = input_tree(nest, model, lso_idx)
             ev = mm.get("events")
             t_mm = np.asarray(ev["times"])
             for k in g:
