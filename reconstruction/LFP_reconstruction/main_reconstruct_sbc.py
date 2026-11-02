@@ -1,31 +1,17 @@
 #!/usr/bin/env python3
-"""
-HybridLFPy LFP reconstruction for the AVCN spherical bushy cell (SBC) population.
+"""Near-field LFP of the AVCN spherical bushy cell (SBC) population.
 
-Parallel to main_reconstruct_avcn.py (the globular bushy cell), reusing the
-same AVCNPopulation subclass and plotting. Only the SBC deltas are here:
+Same AVCNPopulation and figures as main_reconstruct_avcn.py; SBC specifics:
+  morphology    SBC_S113.hoc (NeuroMorpho, Atoh7+)
+  channels      cnmodel XM13_nacncoop Type II-I (less KLT and Na)
+  convergence   3 ANF endbulbs per cell (NEST ANFs2SBCs), large, axosomatic
+                (85% soma, 15% proximal dendrite)
+  geometry      rostral spherical-cell area, ELLIPSE_RADIUS_Y = 875 µm
 
-  morphology    SBC EM reconstruction SBC_S113.hoc (NeuroMorpho Atoh7+,
-                converted by models/avcn/swc_to_hoc.py), not GBC's VCN_c09
-  channels      cnmodel XM13_nacncoop Type II-I (less KLT and Na, so higher
-                input resistance), not GBC's Type II
-  convergence   3 ANF endbulbs per SBC (params.py ANFs2SBCs), not 20
-  endbulbs      few, large, axosomatic (85% soma, 15% proximal dendrite),
-                not GBC's 70/20/5/5 modified endbulbs
-  population    28,000 SBC per side (params.py n_SBCs), not 3,600
-  geometry      rostral spherical-cell area ~1.5-2.0 mm rostrocaudal, so
-                ELLIPSE_RADIUS_Y = 875 µm rather than 600
+  mpiexec -n 4 python LFP_reconstruction/main_reconstruct_sbc.py --pic-file RESULTS/<f>.pic \
+      --angle 0 --side L --n-cells 3600
 
-Presynaptic drive, taus, coherent ventromedial axon orientation, probe and
-tonotopy are identical to the GBC pipeline.
-
-CLI (single or MPI):
-  python LFP_reconstruction/main_reconstruct_sbc.py --pic-file RESULTS/x.pic \
-      --angle 0 --side L --n-cells 100
-  mpiexec -n 4 python LFP_reconstruction/main_reconstruct_sbc.py ... --n-cells 3600
-
-Outputs go to RESULTS/lfp_tmp/output_sbc_{stem}_angle{A}_{S}/figures/:
-  sbc_lfp_reconstruction.png, sbc_lfp_phase_cycle.png, sbc_lfp_single_cells.png
+Outputs: RESULTS/lfp_tmp/output_sbc_<stem>_<stimulus>_<side>/ (LFP and figures).
 """
 
 import os
@@ -38,9 +24,10 @@ import numpy as np
 import lfpykit.models as lfpykit_models
 import hybridLFPy
 
-from recon_core import params as P, paths
+from recon_core.config import params as P
+from recon_core.utils import paths
 from LFP_reconstruction import figures
-from recon_core.mpi_utils import COMM, RANK, broadcast_from_root
+from recon_core.utils.mpi_utils import COMM, RANK, broadcast_from_root
 
 sys.path.insert(0, paths.AVCN_MODELS_DIR)
 import gbc_biophysics                                    # noqa: E402
@@ -129,7 +116,7 @@ def main():
     pop_label = f'SBC_{side}'
     pop = AVCNPopulation(
         n_syn_per_pop=n_syn_per_pop,
-        axon_target=AXON_TARGET,
+        axon_target=AXON_TARGET[side],
         n_post_total=N_SBC_TOTAL,
         n_endbulbs=N_ENDBULBS,
         endbulb_weights=ENDBULB_WEIGHTS_SBC,

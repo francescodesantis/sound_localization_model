@@ -24,7 +24,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from recon_core import params as P
+from recon_core.config import params as P
 from LFP_reconstruction import figures
 
 # Directory prefix to (figure style, probe half-span). Longest prefix wins, so

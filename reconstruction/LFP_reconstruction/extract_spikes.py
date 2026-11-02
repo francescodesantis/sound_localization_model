@@ -17,7 +17,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from recon_core import brainstem, paths                         # noqa: E402
+from recon_core.config import brainstem                         # noqa: E402
+from recon_core.utils import paths
 
 # Unpickling a .pic reconstructs objects defined under simulate/, so that package
 # has to be importable before dill.load() is called.
@@ -121,9 +122,14 @@ def extract_and_save(pic_file, angle, side, spikes_dir):
     # contralateral GBC). MSO, LSO and AVCN ignore this extra GDF.
     _write_pop(data_contra, 'GBC', f'GBC_{contra_side}', spikes_dir, metadata)
 
-    # Ipsilateral LSO output train, the LSO projection-neuron spikes that drive
-    # the spiking-LSO ABR (travelling-wave dipole up the lateral lemniscus).
-    # This is the nucleus's own output, not an input; the others ignore it.
+    # Ipsilateral GBC output train. Like LSO_{side} this is an OUTPUT, not an
+    # input: the NEST reference the NEURON GBC is compared against
+    # (validate_nest_vs_neuron.py). The MSO, LSO and MNTB ignore it.
+    if 'GBC' in data_ipsi:
+        _write_pop(data_ipsi, 'GBC', f'GBC_{side}', spikes_dir, metadata)
+
+    # Ipsilateral LSO output train: the nucleus's own output, not an input.
+    # Read by the NEST-vs-NEURON comparison and the PSTH, not by any generator.
     if 'LSO' in data_ipsi:
         _write_pop(data_ipsi, 'LSO', f'LSO_{side}', spikes_dir, metadata)
 

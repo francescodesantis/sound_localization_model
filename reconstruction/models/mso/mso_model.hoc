@@ -1,13 +1,22 @@
-// MSO multicompartment morphology for LFPy.Cell
-// Bipolar neuron: soma + dend_medial (positive z) + dend_lateral (negative z)
+// MSO multicompartment cell, used by every pipeline (LFP, ABR, NEURON chain).
+// Subthreshold-active: KLT + Ih, no sodium and no axon, so it does not spike;
+// its dipole is the synaptic one shaped by the voltage-dependent currents.
 //
-// Passive params derived from point-neuron equivalents:
-//   MEMB_CAPS.MSO = 70 pF,  G_LEAK.MSO = 70 pS  (tau = Cm/g = 1 ms)
-//   Total surface area = pi*(20*20 + 2*150*3.5) = 4555.2 um2 = 4.5552e-5 cm2
-//   cm    = 70e-12 F / 4.5552e-5 cm2 = 1.537 uF/cm2
-//   g_pas = 70e-9  S / 4.5552e-5 cm2 = 1.537e-3 S/cm2
-//   e_pas = -51.0 mV  (E_L.MSO)
-//   Ra    = 150 ohm.cm
+// Morphology: soma 20 x 20 um; dend_medial (+z) and dend_lateral (-z), 150 um
+// each, 3.5 um diameter.
+//
+// Membrane (MSO whole-cell data, liquid-junction corrected):
+//   rest      -60 mV = params.MSO_V_INIT, held by Ih against KLT
+//   cm        1.0 uF/cm2
+//   leak      3.33e-5 S/cm2, E_leak -70 mV
+//   KLT       E_K -90 mV;  Ih  E_h -35 mV
+//   KLT and Ih follow a soma > dendrite gradient, fitted at 37 degC to rest
+//   -60 mV and Rin 16.2 MOhm (MSO range 3.7-24 MOhm): tau_m = 0.45 ms.
+//   Inhibitory synapses reverse at params.MSO_INH_REV = -90 mV.
+//
+// Conductances (S/cm2):
+//   soma:       klt 0.00293   ih 0.00463
+//   dendrites:  klt 0.00062   ih 0.00097
 
 create soma, dend_medial, dend_lateral
 
@@ -16,10 +25,16 @@ access soma
 soma {
     nseg = 1
     Ra   = 150
-    cm   = 1.537
+    cm   = 1.0
     insert pas
-    g_pas = 1.537e-3
-    e_pas = -51.0
+    g_pas = 3.33e-5
+    e_pas = -70.0
+    insert klt
+    gbar_klt = 0.00293
+    insert ih
+    gbar_ih = 0.00463
+    eh_ih = -35.0
+    ek = -90.0
     pt3dadd(0, 0, -10, 20)
     pt3dadd(0, 0, 10, 20)
 }
@@ -27,10 +42,16 @@ soma {
 dend_medial {
     nseg = 11
     Ra   = 150
-    cm   = 1.537
+    cm   = 1.0
     insert pas
-    g_pas = 1.537e-3
-    e_pas = -51.0
+    g_pas = 3.33e-5
+    e_pas = -70.0
+    insert klt
+    gbar_klt = 0.00062
+    insert ih
+    gbar_ih = 0.00097
+    eh_ih = -35.0
+    ek = -90.0
     pt3dadd(0, 0, 10, 3.5)
     pt3dadd(0, 0, 160, 3.5)
 }
@@ -38,10 +59,16 @@ dend_medial {
 dend_lateral {
     nseg = 11
     Ra   = 150
-    cm   = 1.537
+    cm   = 1.0
     insert pas
-    g_pas = 1.537e-3
-    e_pas = -51.0
+    g_pas = 3.33e-5
+    e_pas = -70.0
+    insert klt
+    gbar_klt = 0.00062
+    insert ih
+    gbar_ih = 0.00097
+    eh_ih = -35.0
+    ek = -90.0
     pt3dadd(0, 0, -10, 3.5)
     pt3dadd(0, 0, -160, 3.5)
 }

@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
 """
-Per-nucleus scalp ABR at Cz, M1 and M2, one figure per generator.
+Per-nucleus scalp ABR at Cz, M1 and M2: one figure per generator group.
 
-Two sources of the same picture, selected by --filter:
-
-  --filter band  (default) read the stored, band-passed ABR.h5
-  --filter none  re-project the raw head-frame dipole records through the same
-                 4-sphere model without the band-pass. The stored traces are
-                 already filtered and that cannot be undone, so an unfiltered
-                 view has to be rebuilt from the dipoles.
-
---validate re-applies each nucleus's own band to the unfiltered projection and
-checks it reproduces the stored ABR.h5. That is the end-to-end gate on the ABR
-chain: if projection then filter does not equal what the producer wrote, the
-two have diverged.
+Projects each nucleus's head-frame dipole records through the 4-sphere model
+and band-passes them with P.BAND_DEFAULT, the same selection and filter the
+composite uses (main_abr_full._discover).
 
 Usage:
-  python ABR_reconstruction/plots/electrodes.py --pic-file RESULTS/<f>.pic
-  python ABR_reconstruction/plots/electrodes.py --filter none
-  python ABR_reconstruction/plots/electrodes.py --validate
+  python ABR_reconstruction/plots/electrodes.py --pic-file RESULTS/<f>.pic \
+      --itd-us 0 --condition binaural --side both --out <dir>
+      [--variant chain] [--anf-source boundary --wave1-source modiolus]
+
+Writes <out>/cz_m1_m2_{anf,gbc,sbc,mntb,mso,lso}.png.
 """
 
 import argparse
@@ -31,98 +24,73 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import numpy as np
 
-from recon_core import head_model, io_utils, params as P, paths
-from recon_core.signal_utils import bandpass, time_axis
+from recon_core.physics import head_model
+from recon_core.utils import io_utils, paths
+from recon_core.config import params as P
+from recon_core.utils.signal_utils import bandpass, time_axis
+from ABR_reconstruction.main_abr_full import MONAURAL_SIDES, anf_wave1_group
 from ABR_reconstruction.plots import common
-
-def generators(lso_generator='synaptic'):
-    """Each generator: how its dipole records are named, which stored ABR.h5
-    holds it, under which dataset key and directory suffix, and the band that
-    producer used.
-
-    The LSO row follows lso_generator: spiking and synaptic are alternative
-    models of the same cells, never summed, written by different runs into
-    different directories (main_abr_lso.py tags the synaptic one _syn).
-    """
-    lso_suffix = '' if lso_generator == 'spiking' else '_syn'
-    return [
-        # key            label             dipole (nucleus, generator)     prefix  key         band              suffix
-        ('mso', 'MSO', [('MSO', 'postsynaptic')], None, 'data', P.BAND_TOLNAI, ''),
-        ('lso', 'LSO', [('LSO', lso_generator)], 'lso', 'data', P.BAND_TOLNAI,
-         lso_suffix),
-        ('mntb', 'MNTB', [('MNTB', 'principal'), ('MNTB', 'calyx')], 'mntb',
-         'composite', P.BAND_CLINICAL, ''),
-        ('avcn_combined', 'AVCN (GBC+SBC)', [('AVCN', 'GBC'), ('AVCN', 'SBC')],
-         'avcn', 'composite', P.BAND_CLINICAL, ''),
-        ('avcn_gbc', 'AVCN GBC', [('AVCN', 'GBC')], 'avcn', 'GBC',
-         P.BAND_CLINICAL, ''),
-        ('avcn_sbc', 'AVCN SBC', [('AVCN', 'SBC')], 'avcn', 'SBC',
-         P.BAND_CLINICAL, ''),
-    ]
 
 FULL_NAME = {'Cz': 'Cz (vertex)', 'M1': 'M1 (left mastoid)',
              'M2': 'M2 (right mastoid)'}
 
 
-# Which hemisphere each monaural nucleus keeps under a monaural condition.
-# Same rule as main_abr_full._discover: the silent ear drives no click-locked
-# response, so AVCN keeps the side ipsilateral to the stimulated ear and MNTB
-# the opposite one (the GBC to calyx projection decussates).
-EAR_SIDES = {'right_ear': ('R', 'L'), 'left_ear': ('L', 'R')}
+def generators(anf_source='boundary', wave1_source='modiolus'):
+    """(key, label, [(nucleus, generator), ...]) for every figure."""
+    return [
+        ('anf', 'ANF (auditory nerve)',
+         [('ANF', anf_wave1_group(anf_source, wave1_source)),
+          *[('ANF', g) for g in P.ANF_STATIONARY_GROUPS]]),
+        ('gbc', 'AVCN GBC', [('AVCN', 'GBCsoma'), ('AVCN', 'GBCaxon')]),
+        ('sbc', 'AVCN SBC', [('AVCN', 'SBC')]),
+        ('mntb', 'MNTB', [('MNTB', 'principal'), ('MNTB', 'calyx')]),
+        ('mso', 'MSO', [('MSO', 'postsynaptic')]),
+        ('lso', 'LSO', [('LSO', 'synaptic')]),
+    ]
 
 
-def record_sides(nucleus, condition):
-    """Hemispheres of a nucleus that contribute under this condition."""
-    mono = EAR_SIDES.get(condition)
-    if mono is None:
-        return ('L', 'R')
-    if nucleus == 'AVCN':
-        return (mono[0],)
-    if nucleus == 'MNTB':
-        return (mono[1],)
-    return ('L', 'R')          # MSO and LSO are binaural, keep both
+def record_sides(nucleus, condition, side='both'):
+    """Hemispheres of a nucleus included under this condition and --side."""
+    wanted = ('L', 'R') if side == 'both' else (side,)
+    mono = MONAURAL_SIDES.get(condition)
+    if mono is None or nucleus in ('MSO', 'LSO'):
+        driven = ('L', 'R')
+    elif nucleus in ('ANF', 'AVCN'):
+        driven = (mono[0],)
+    else:                                   # MNTB: the GBC -> calyx path decussates
+        driven = (mono[1],)
+    return tuple(s for s in driven if s in wanted)
 
 
-def project_unfiltered(stem, cond_label, generators, electrodes,
-                       condition='binaural'):
-    """Sum the raw dipole records at the scalp, in µV, with no band-pass.
+def project(directory, gens, electrodes, condition, side):
+    """Sum the records of `gens` at the scalp, band-passed, in µV.
 
-    Exactly head_model.superpose_sources minus the filter, so the two stay
-    comparable, which is what makes --validate meaningful.
-
-    Under a monaural condition the condition-specific record is used where one
-    exists and the binaural one otherwise, and the monaural nuclei are
-    restricted to the ear-driven hemisphere -- the same selection
-    main_abr_full._discover makes, so a per-nucleus figure and the composite
-    are built from exactly the same records.
+    Returns (V, srate), or (None, reason) when a record is missing or no
+    hemisphere is selected. Extended records contribute one source per bin.
     """
-    directory = paths.dipoles_dir_for(stem, cond_label)
     sources, srate = [], None
-    for nucleus, generator in generators:
-        for side in record_sides(nucleus, condition):
-            stem_path = os.path.join(directory,
-                                     f'{nucleus}__{generator}__{side}__')
-            path = stem_path + f'{condition}.h5'
+    for nucleus, generator in gens:
+        sides = record_sides(nucleus, condition, side)
+        if not sides:
+            return None, 'no hemisphere selected'
+        for s in sides:
+            base = os.path.join(directory, f'{nucleus}__{generator}__{s}__')
+            path = base + f'{condition}.h5'
             if not os.path.exists(path):
-                path = stem_path + 'binaural.h5'
+                path = base + 'binaural.h5'
             if not os.path.exists(path):
-                return None, None
+                return None, f'missing {os.path.basename(path)}'
             attrs, p_head, r_dipole = io_utils.read_dipole_record(path)
             srate = attrs['srate']
-            sources.append(('all', p_head, r_dipole))
+            sources += [('all', p_head[k], r_dipole[k]) for k in range(p_head.shape[0])]
     V_mV = head_model.project_sources(sources, electrodes)['all']
-    return V_mV * 1e3, srate
+    lo, hi = P.BAND_DEFAULT
+    return bandpass(V_mV * 1e3, fs=srate, lo=lo, hi=hi), srate
 
 
-def plot(label, t_ms, traces, electrodes, out_png, filtered, condition='binaural',
-         ylim=None):
-    """Three side-by-side panels sharing one y-range, so they are comparable.
-
-    ylim=(lo, hi) forces that range instead of the auto one, which is what makes
-    the SAME nucleus comparable across figures (e.g. two HRIR subjects).
-    """
+def plot(label, t_ms, traces, electrodes, out_png, condition):
+    """Three side-by-side panels sharing one y-range."""
     fig, axes = plt.subplots(1, 3, figsize=(15, 5), constrained_layout=True)
     for ax, elec, trace in zip(axes, electrodes, traces):
         ax.plot(t_ms, trace, color='tab:blue', lw=1.0, label=elec)
@@ -133,109 +101,48 @@ def plot(label, t_ms, traces, electrodes, out_png, filtered, condition='binaural
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
         ax.set_title(FULL_NAME.get(elec, elec), fontsize=11)
-
-    if ylim is None:
-        lo = min(ax.get_ylim()[0] for ax in axes)
-        hi = max(ax.get_ylim()[1] for ax in axes)
-    else:
-        lo, hi = ylim
+    lo = min(ax.get_ylim()[0] for ax in axes)
+    hi = max(ax.get_ylim()[1] for ax in axes)
     for ax in axes:
         ax.set_ylim(lo, hi)
-
-    band = 'band-passed' if filtered else 'NO bandpass'
     fig.suptitle(f'{label} ABR  |  {" / ".join(electrodes)}  |  {condition}  |  '
-                 f'{band}  |  vertex-positive upward',
+                 f'band-passed  |  vertex-positive upward',
                  fontsize=13, fontweight='bold')
     common.save(fig, out_png, dpi=170)
-
-
-def validate(stem, cond, electrodes, gens):
-    """Re-filter the projection and compare with what the producer stored."""
-    ok = True
-    for _key, label, sources, prefix, dataset, band, suffix in gens:
-        V_raw, srate = project_unfiltered(stem, cond, sources, electrodes)
-        if V_raw is None:
-            print(f'[{label:16s}] missing dipole records -> skip')
-            ok = False
-            continue
-        stored = common.load_trace(
-            common.abr_dir(stem, cond, 'both', prefix=prefix, suffix=suffix),
-            key=dataset)
-        if stored is None:
-            print(f'[{label:16s}] missing stored ABR.h5 -> skip')
-            ok = False
-            continue
-        refiltered = bandpass(V_raw, fs=srate, lo=band[0], hi=band[1])
-        reference = stored[0]
-        n = min(refiltered.shape[1], reference.shape[1])
-        rel = (np.abs(refiltered[:, :n] - reference[:, :n]).max()
-               / (np.abs(reference).max() + 1e-30))
-        verdict = 'OK' if rel < 1e-6 else 'MISMATCH'
-        ok &= rel < 1e-6
-        print(f'[{label:16s}] band {band[0]:.0f}-{band[1]:.0f} Hz  '
-              f'rel-err={rel:.2e}  {verdict}')
-    return ok
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    common.add_common_args(ap, window=False, stim_label=False)
-    ap.add_argument('--filter', choices=['band', 'none'], default='band',
-                    help='band = stored band-passed traces; none = re-project raw dipoles')
-    ap.add_argument('--validate', action='store_true',
-                    help='check projection+filter reproduces the stored ABR.h5')
-    ap.add_argument('--lso-generator', choices=['spiking', 'synaptic'],
-                    default='synaptic', dest='lso_generator',
-                    help='which LSO model to show; they are alternatives, never '
-                         'summed, and live in different output directories')
+    ap.add_argument('--pic-file', dest='pic_file', required=True)
+    sel = ap.add_mutually_exclusive_group()
+    sel.add_argument('--angle', type=int, default=0)
+    sel.add_argument('--itd-us', dest='itd_us', type=float, default=None)
+    sel.add_argument('--ild-db', dest='ild_db', type=float, default=None)
     ap.add_argument('--condition', default='binaural',
-                    choices=['binaural', 'left_ear', 'right_ear'],
-                    help='acoustic condition; monaural is always rebuilt from '
-                         'the dipole records, because the producers only ever '
-                         'stored a both-hemispheres binaural ABR.h5')
+                    choices=['binaural', 'left_ear', 'right_ear'])
+    ap.add_argument('--side', default='both', choices=['L', 'R', 'both'])
+    ap.add_argument('--variant', default=None, choices=['chain'])
+    ap.add_argument('--anf-source', dest='anf_source', default='boundary',
+                    choices=['full', 'boundary'])
+    ap.add_argument('--wave1-source', dest='wave1_source', default='modiolus',
+                    choices=['aperture', 'modiolus'])
+    ap.add_argument('--out', required=True, help='output directory')
     args = ap.parse_args()
 
-    stem = common.resolve_stem(args)
-    cond = common.resolve_condition(args)
-    electrodes = common.ELECTRODES
-    gens = generators(args.lso_generator)
+    stem = paths.pic_stem(args.pic_file)
+    _, cond_label = paths.condition_key(args.angle, args.itd_us, args.ild_db)
+    directory = paths.dipoles_dir_for(stem, cond_label, variant=args.variant)
+    electrodes = list(P.ELECTRODES)
+    os.makedirs(args.out, exist_ok=True)
 
-    if args.validate:
-        sys.exit(0 if validate(stem, cond, electrodes, gens) else 1)
-
-    out_dir = args.out or os.path.join(
-        paths.RESULTS_DIR, 'cz_m1_m2' + ('' if args.filter == 'band' else '_nofilter')
-        + ('' if args.condition == 'binaural' else f'_{args.condition}'))
-    os.makedirs(out_dir, exist_ok=True)
-
-    for key, label, sources, prefix, dataset, band, dir_suffix in gens:
-        if args.filter == 'band' and args.condition == 'binaural':
-            loaded = common.load_trace(
-                common.abr_dir(stem, cond, 'both', prefix=prefix,
-                               suffix=dir_suffix), key=dataset)
-            if loaded is None:
-                print(f'[{label}] no stored {dataset} trace -> skip')
-                continue
-            V, names, srate = loaded
-            traces = [V[names.index(e)] for e in electrodes]
-            name_suffix = ''
-        else:
-            V, srate = project_unfiltered(stem, cond, sources, electrodes,
-                                          condition=args.condition)
-            if V is None:
-                print(f'[{label}] missing dipole records -> skip')
-                continue
-            if args.filter == 'band':
-                # Re-derive what the producer would have stored for this
-                # condition, with that producer's own band. --validate is the
-                # gate that says this equals the stored trace.
-                V = bandpass(V, fs=srate, lo=band[0], hi=band[1])
-            traces = list(V)
-            name_suffix = '' if args.filter == 'band' else '_nofilter'
-        plot(label, time_axis(len(traces[0]), srate), traces, electrodes,
-             os.path.join(out_dir, f'cz_m1_m2_{key}{name_suffix}.png'),
-             filtered=args.filter == 'band', condition=args.condition)
+    for key, label, gens in generators(args.anf_source, args.wave1_source):
+        V, info = project(directory, gens, electrodes, args.condition, args.side)
+        if V is None:
+            print(f'[{label}] skipped: {info}')
+            continue
+        plot(label, time_axis(V.shape[1], info), list(V), electrodes,
+             os.path.join(args.out, f'cz_m1_m2_{key}.png'), args.condition)
 
 
 if __name__ == '__main__':

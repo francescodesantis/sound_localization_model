@@ -1,19 +1,12 @@
-"""
-Append a synthetic node/internode active myelinated axon to a loaded bushy cell.
+"""Append a synthetic myelinated node/internode axon to a loaded bushy cell.
 
-The EM globular-bushy-cell reconstructions carry only ~18 µm of myelinated
-axon, far too short to support a propagating action potential. For the GBC
-axonal travelling-wave dipole (the GBC to contralateral MNTB volley, an ABR
-generator) the axon is extended with a synthetic node/internode cable of
-realistic length and then decorated by gbc_biophysics (nodes active, internodes
-passive myelin), so a saltatory AP can propagate and feed CurrentDipoleMoment.
+The EM globular bushy cell carries only ~18 µm of myelinated axon, too short
+to propagate an action potential. The axon is extended to the contralateral
+MNTB with a node/internode cable, appended to the SectionLists Node_of_Ranvier
+and Internode, which gbc_biophysics maps to the 'node' and 'internode'
+classes. Geometry and topology only; biophysics in gbc_biophysics.
 
-Sections are created in NEURON and appended to two SectionLists,
-Node_of_Ranvier and Internode, the names gbc_biophysics.COMPARTMENT_OF maps to
-the 'node' and 'internode' compartment classes, so decoration is automatic.
-
-This is a morphology construction step, geometry and topology only; the
-biophysics stays in gbc_biophysics.decorate_gbc.
+    python models/avcn/axon_builder.py      # bake VCN_c09_extended_axon.hoc
 """
 
 import os
@@ -22,30 +15,65 @@ from collections import defaultdict
 import numpy as np
 from neuron import h
 
-# --- geometry of the crossing GBC axon -------------------------------------
-# Calibre is measured, not a placeholder: Beckius, Batra & Oliver (1999)
-# reconstructed AVCN axons in cat in 3-D and measured the fibre at the midline,
-# exactly this crossing trapezoid-body segment, at 2.09 +/- 0.33 and
-# 2.21 +/- 0.44 um. The globular bushy cell's axon is one of the thickest in
-# the brainstem, about 3x the spherical bushy cell's, and the calibre is what
-# buys the conduction speed the calyx of Held needs.
-#
-# These numbers are cat. No human GBC axon morphometry exists. Human axons are
-# longer and conduction time is broadly conserved across species by scaling
-# calibre, so 2.1 um is more likely a floor than a target for human.
-FIBER_DIAM    = 2.1     # µm  internode (myelinated) diameter, Beckius 1999, cat
-NODE_DIAM     = 1.4     # µm  node constricted to the same 0.67 ratio as before
-NODE_LEN      = 1.0     # µm
-INTERNODE_LEN = 210.0   # µm  (~100x fibre diameter, the standard scaling)
+# --- calibre of the crossing GBC axon ----------------------------------------
+# Outer (axon + myelin) diameter 8 µm, within the 6-10 µm quoted for the
+# largest mammalian GBC fibres (cat midline: 2.1-2.2 µm, Beckius et al. 1999).
+# NEURON `diam` is the conducting core, G_RATIO x outer; myelin enters through
+# the internode capacitance (gbc_biophysics.CM_MYELIN).
+G_RATIO           = 0.65     #     inner/outer, within the 0.60-0.76 measured
+                             #     for large auditory-brainstem CNS fibre
+FIBER_OUTER_DIAM  = 8.0      # µm  axon + myelin, the quoted fibre diameter
+FIBER_DIAM    = G_RATIO * FIBER_OUTER_DIAM        # µm  conducting core (NEURON diam)
+NODE_LEN      = 1.0                               # µm
 
-# Truncation. The real path from the cochlear nucleus to the contralateral MNTB
-# is ~15 mm (13.9 mm of it mediolateral, see head_geometry.NUCLEUS_POS_UM), so
-# this 4 mm cable is a deliberate stump. It does not shrink the peak dipole: an
-# action potential occupies only ~2.2 mm at this conduction velocity, so it fits
-# inside the modelled cable. What it truncates is the volley's duration, ~0.8 ms
-# modelled against ~3 ms for the full path, making the reconstructed wave III
-# sharper than the real one rather than smaller.
-AXON_LENGTH   = 4000.0  # µm  extension toward the contralateral MNTB
+# --- internodes ---------------------------------------------------------------
+# GBC trapezoid-body axons have L/d ~ 60 (sheath lengths stay fixed while the
+# axon thickens after hearing onset); measured internodes 200-250 µm.
+INTERNODE_LEN_TRACT    = 250.0   # µm  steady state, far from the terminal
+INTERNODE_LEN_TERMINAL = 100.0   # µm  final internodes before the heminode
+
+# --- nodes ---------------------------------------------------------------------
+# ~1.9 µm in the tract, widening toward the terminal; the larger nodal area
+# keeps the safety factor against the calyx's capacitive load.
+NODE_DIAM_TRACT    = 1.9     # µm
+NODE_DIAM_TERMINAL = 3.0     # µm  at the heminode
+
+# --- distal taper --------------------------------------------------------------
+# Internodes shorten and nodes widen together over the last 1.2 mm.
+TAPER_LEN = 1200.0   # µm  graded, not stepped
+
+# --- length --------------------------------------------------------------------
+# head_geometry.GBC_AXON_LENGTH_UM: atlas chord to the contralateral MNTB x
+# tortuosity.
+def _default_axon_length():
+    import os as _os, sys as _sys
+    _root = _os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__))))
+    if _root not in _sys.path:
+        _sys.path.insert(0, _root)
+    from recon_core.config.head_geometry import GBC_AXON_LENGTH_UM
+    return float(GBC_AXON_LENGTH_UM)
+
+
+AXON_LENGTH = _default_axon_length()   # µm  toward the contralateral MNTB
+
+# The trunk ends at the heminode. The post-heminode neck and the calyx arbor
+# belong to the MNTB calyx generator (models/mntb/calyx_model.hoc).
+
+
+def internode_len_at(dist_from_start, total_length, taper_len=TAPER_LEN):
+    """Internode length µm at `dist_from_start`, graded across the taper."""
+    f = (dist_from_start - (total_length - taper_len)) / taper_len
+    f = min(1.0, max(0.0, f))
+    return INTERNODE_LEN_TRACT + f * (INTERNODE_LEN_TERMINAL - INTERNODE_LEN_TRACT)
+
+
+def node_diam_at(dist_from_start, total_length, taper_len=TAPER_LEN):
+    """Node diameter µm at `dist_from_start`, graded across the taper."""
+    f = (dist_from_start - (total_length - taper_len)) / taper_len
+    f = min(1.0, max(0.0, f))
+    return NODE_DIAM_TRACT + f * (NODE_DIAM_TERMINAL - NODE_DIAM_TRACT)
+
 
 SL_NODE  = 'Node_of_Ranvier'
 SL_INTER = 'Internode'
@@ -104,51 +132,81 @@ def _distal_axon_end(direction=None):
     return term, p_last, d
 
 
-def build_extended_axon(length=AXON_LENGTH, internode_len=INTERNODE_LEN,
-                        node_len=NODE_LEN, fiber_diam=FIBER_DIAM,
-                        node_diam=NODE_DIAM, direction=None, verbose=False):
-    """Append a straight node/internode cable to the cell's distal axon.
+def build_extended_axon(length=AXON_LENGTH, node_len=NODE_LEN,
+                        fiber_diam=FIBER_DIAM, taper_len=TAPER_LEN,
+                        direction=None, verbose=False):
+    """Append a graded node/internode cable, ending at the heminode.
 
     Returns (nodes, internodes), the created Sections in order. The cable
-    begins at the existing axon's distal tip and runs straight along its exit
-    direction, or along direction if given. Geometry only; call
-    gbc_biophysics.decorate_gbc afterwards to make the nodes active.
+    begins at the existing axon's distal tip and runs STRAIGHT along `direction`
+    (the atlas chord to the contralateral MNTB, supplied by the caller), or
+    along the existing axon's exit direction if none is given.
+
+    Internode length and node diameter are constant over the first
+    length - taper_len, then graded to the terminal values across the taper
+    (see internode_len_at / node_diam_at). The last section created is a node:
+    the HEMINODE, where saltatory conduction ends. Nothing distal to it is built
+    here -- the post-heminode neck and the calyx arbor belong to the MNTB calyx
+    generator.
+
+    Geometry only; call gbc_biophysics.decorate_gbc afterwards to make the nodes
+    active.
     """
     _ensure_sectionlists()
     term, pos, d = _distal_axon_end(direction)
 
-    n_internodes = int(round(length / (internode_len + node_len)))
     nodes, internodes = [], []
     prev, prev_loc = term, 1.0
     pos = pos.astype(float).copy()
+    dist, i = 0.0, 0
 
-    for i in range(n_internodes):
+    while True:
+        inter_len = internode_len_at(dist, length, taper_len)
+        # stop before overrunning: the heminode has to fit too
+        if dist + inter_len + node_len > length:
+            break
+
         inter = h.Section(name='internode_%d' % i)
         p0 = pos.copy()
-        p1 = pos + d * internode_len
+        p1 = pos + d * inter_len
         h.pt3dadd(p0[0], p0[1], p0[2], fiber_diam, sec=inter)
         h.pt3dadd(p1[0], p1[1], p1[2], fiber_diam, sec=inter)
         inter.connect(prev(prev_loc), 0)
         _append(SL_INTER, inter)
         internodes.append(inter)
-        pos = p1
+        pos, dist = p1, dist + inter_len
         prev, prev_loc = inter, 1.0
 
+        nd = node_diam_at(dist, length, taper_len)
         node = h.Section(name='node_%d' % i)
         p1n = pos + d * node_len
-        h.pt3dadd(pos[0], pos[1], pos[2], node_diam, sec=node)
-        h.pt3dadd(p1n[0], p1n[1], p1n[2], node_diam, sec=node)
+        h.pt3dadd(pos[0], pos[1], pos[2], nd, sec=node)
+        h.pt3dadd(p1n[0], p1n[1], p1n[2], nd, sec=node)
         node.connect(prev(1.0), 0)
         _append(SL_NODE, node)
         nodes.append(node)
-        pos = p1n
+        pos, dist = p1n, dist + node_len
         prev, prev_loc = node, 1.0
+        i += 1
+
+    # The heminode: the terminal node, widened, where the trunk stops.
+    hemi = h.Section(name='heminode')
+    p1n = pos + d * node_len
+    h.pt3dadd(pos[0], pos[1], pos[2], NODE_DIAM_TERMINAL, sec=hemi)
+    h.pt3dadd(p1n[0], p1n[1], p1n[2], NODE_DIAM_TERMINAL, sec=hemi)
+    hemi.connect(prev(1.0), 0)
+    _append(SL_NODE, hemi)
+    nodes.append(hemi)
+    dist += node_len
 
     if verbose:
-        total = n_internodes * (internode_len + node_len)
         print(f'[axon_builder] appended {len(internodes)} internodes + '
-              f'{len(nodes)} nodes = {total:.0f} µm from {term.name()} '
-              f'along {np.round(d, 2)}')
+              f'{len(nodes)} nodes (last = heminode) = {dist:.0f} \u00b5m of a '
+              f'requested {length:.0f} \u00b5m from {term.name()} '
+              f'along {np.round(d, 3)}')
+        print(f'[axon_builder]   internode {internodes[0].L:.0f} -> '
+              f'{internodes[-1].L:.0f} \u00b5m, node diam '
+              f'{nodes[0].diam:.2f} -> {nodes[-1].diam:.2f} \u00b5m')
     return nodes, internodes
 
 
@@ -256,6 +314,18 @@ if __name__ == '__main__':
         HERE, 'morphology', 'dryad', 'VCN_c09_Full_MeshInflate.hoc'))
     ap.add_argument('--out', default=os.path.join(
         HERE, 'morphology', 'extended', 'VCN_c09_extended_axon.hoc'))
-    ap.add_argument('--length', type=float, default=AXON_LENGTH)
+    ap.add_argument('--length', type=float, default=AXON_LENGTH,
+                    help='total axon length in um (default: the atlas chord to '
+                         'the contralateral MNTB x GBC_MNTB_TORTUOSITY)')
+    ap.add_argument('--outer-diam', type=float, default=FIBER_OUTER_DIAM,
+                    dest='outer_diam',
+                    help='quoted fibre diameter (axon + myelin) in um; the '
+                         'conducting core is G_RATIO x this. Internode length '
+                         'is NOT derived from it -- see INTERNODE_LEN_TRACT.')
+    ap.add_argument('--taper-len', type=float, default=TAPER_LEN,
+                    dest='taper_len',
+                    help='length of the distal taper in um')
     a = ap.parse_args()
-    make_extended_morphology(a.src, a.out, length=a.length)
+    make_extended_morphology(
+        a.src, a.out, length=a.length, taper_len=a.taper_len,
+        fiber_diam=G_RATIO * a.outer_diam)

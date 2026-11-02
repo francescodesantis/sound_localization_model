@@ -1,38 +1,23 @@
-"""
-Complete brainstem ABR: superpose all nuclei into one composite.
+"""Complete brainstem ABR: superpose every nucleus into one composite.
 
-Each per-nucleus ABR script (main_abr{,_avcn,_lso,_mntb}.py) writes a
-standardised head-frame dipole record per (generator, side) into
+Each per-nucleus script writes head-frame dipole records to
+RESULTS/abr_tmp/dipoles/<stem>_<stimulus>[_chain]/<nucleus>__<generator>__<side>__<condition>.h5.
+This script collects them for one stimulus, projects each generator through
+the 4-sphere model from its own position and sums the scalp potentials. No
+NEURON run is repeated. All records share DT and TSTOP; they are summed
+unscaled, so every nucleus must be simulated at full N.
 
-    RESULTS/abr_tmp/dipoles/<stem>_<cond>/<nucleus>__<generator>__<side>.h5
+Generators, each modelled once:
+  ANF        wave I source + porus (I_n) + brainstem entry (II_p)
+  AVCN       GBCsoma, GBCaxon (the crossing axon), SBC
+  MNTB       principal, calyx
+  MSO        postsynaptic
+  LSO        synaptic
 
-(see main_abr.save_dipole_record), where <cond> is the stimulus label the
-producers ran with ('angle0', 'itd500us', 'ild-10dB'). This orchestrator
-collects those records for one stimulus, selected with the same --angle,
---itd-us or --ild-db flag, projects every generator through the 4-sphere model
-from its own anatomical position, and sums the scalp potentials. No NEURON
-simulation is re-run: run each nucleus once at full N, then this.
-
-All four pipelines share DT=0.026 ms and TSTOP=50 ms, so every dipole lives on
-the same time axis and the inter-wave latencies fall out of the NEST spike
-timing. Full-count runs are assumed (no N_total/n_cells scaling): the raw head
-dipoles are summed as they are.
-
-Generators, each modelled exactly once so nothing is counted twice:
-  AVCN:GBC   waves II to III (GBC soma, dendrites and 4 mm crossing axon)
-  AVCN:SBC   wave II
-  MNTB:principal / MNTB:calyx   small own field (wave III proper is the GBC axon)
-  MSO:postsynaptic            waves IV to V
-  LSO:spiking|synaptic        waves IV to V (LL travelling wave, BIC)
-Wave I (ANF) is not modelled, so the earliest generator is the GBC.
-
-Output:
-  RESULTS/full_abr/<stem>_<cond>_<sidespec>/ABR_full.h5
-        (per-generator, per-nucleus and composite, µV) + figures/full_abr.png
-
-Usage:
   python ABR_reconstruction/main_abr_full.py --pic-file RESULTS/<f>.pic \
-        --angle 0 --side both [--nuclei MSO,AVCN,LSO,MNTB] [--derivation Cz-M1]
+      --angle 0 --side both [--condition ...] [--variant chain] [--out-dir DIR]
+
+Output: <out-dir>/ABR_full.h5 (per generator, per nucleus and composite, µV).
 """
 
 import os
@@ -45,13 +30,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import h5py
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
-from recon_core import head_model, io_utils, paths, params as P
-from recon_core.head_geometry import ABR_ELECTRODES
-from recon_core.signal_utils import derive, onset_latency, time_axis
+from recon_core.physics import head_model
+from recon_core.utils import io_utils, paths
+from recon_core.config import params as P
+from recon_core.config.head_geometry import ABR_ELECTRODES
+from recon_core.utils.signal_utils import onset_latency, time_axis
 
 # No NEURON here: this orchestrator only reads dipole records the producers wrote.
 ELECTRODES = list(ABR_ELECTRODES)
@@ -60,35 +44,43 @@ REPO_ROOT = paths.REPO_ROOT
 _pic_stem = paths.pic_stem
 dipoles_dir_for = paths.dipoles_dir_for
 
+#: Monaural condition -> (side of the ear-driven AVCN and ANF, side of the
+#: ear-driven MNTB); the GBC -> calyx projection decussates.
+MONAURAL_SIDES = {'right_ear': ('R', 'L'), 'left_ear': ('L', 'R')}
+
+
+#: Generators each nucleus writes (ANF: see P.ANF_WAVE1_GROUPS and
+#: P.ANF_STATIONARY_GROUPS). Records of any other generator are skipped.
+KNOWN_GENERATORS = {
+    'AVCN': P.GBC_GROUPED_GROUPS + ('SBC',),
+    'MNTB': ('principal', 'calyx'),
+    'MSO': ('postsynaptic',),
+    'LSO': ('synaptic',),
+}
+
+
+def anf_wave1_group(anf_source, wave1_source):
+    """Record name of the wave I generator main_abr_anf.py writes in this mode."""
+    if anf_source == 'full':
+        return P.ANF_DISTRIBUTED_GROUP
+    return P.ANF_MODIOLUS_GROUP if wave1_source == 'modiolus' else P.ANF_DISTAL_GROUP
+
 
 # ---------------------------------------------------------------------------
 def _discover(stem, cond_label, want_nuclei, want_sides, want_condition,
-              lso_generator='spiking', gbc_dipole='lumped'):
+              anf_source='boundary', variant=None):
     """Load matching dipole records as (records, srate).
 
-    Each record is (label, nucleus, side, p_head, r_dipole). srate comes from
-    the records themselves, so this orchestrator needs no simulation constants.
-
-    Per (nucleus, generator, side) the requested want_condition is used if a
-    record for it exists, else the binaural record. So a monaural composite
-    reuses the condition-invariant AVCN/MNTB records, only ever written as
-    binaural, while picking the condition-specific MSO/LSO records.
-
-    lso_generator selects the LSO generator: 'spiking' (output travelling wave)
-    and 'synaptic' (postsynaptic dipole) are alternative models of the LSO's
-    ABR contribution and are never summed, so only the requested one is kept.
-
-    Under a monaural condition (left_ear/right_ear) the nuclei that are
-    monaural by construction are restricted to the ear-appropriate hemisphere:
-    the silent ear drives no click-locked response, so AVCN keeps only its
-    ipsilateral side and MNTB the opposite one (the GBC to calyx projection
-    decussates). MSO and LSO keep both hemispheres.
+    Each record is (label, nucleus, side, p_head, r_dipole). Per (nucleus,
+    generator, side) the record for want_condition is used if present, else the
+    binaural one (AVCN and MNTB write only binaural). Under a monaural condition
+    AVCN and ANF keep the ear-driven side and MNTB the opposite one (the GBC ->
+    calyx projection decussates); MSO and LSO keep both. `variant` selects the
+    record set (None: NEST-driven, 'chain': NEURON chain).
     """
-    # ear to (AVCN side, MNTB side) for monaural conditions
-    _EAR_SIDES = {'right_ear': ('R', 'L'), 'left_ear': ('L', 'R')}
-    mono = _EAR_SIDES.get(want_condition)
+    mono = MONAURAL_SIDES.get(want_condition)
 
-    ddir = dipoles_dir_for(stem, cond_label)
+    ddir = dipoles_dir_for(stem, cond_label, variant=variant)
     record_paths = sorted(glob.glob(os.path.join(ddir, '*.h5')))
     if not record_paths:
         raise FileNotFoundError(
@@ -97,54 +89,105 @@ def _discover(stem, cond_label, want_nuclei, want_sides, want_condition,
             f'    python ABR_reconstruction/main_abr_avcn.py --pic-file ... '
             f'--side both')
 
-    # The split GBC (GBCsyn/GBCspike/GBCtrunk) and the legacy lumped GBC are
-    # ALTERNATIVE models of the same cell, never summed -- the same rule the LSO
-    # generators follow. _discover is glob-driven with no count check, so a
-    # stale AVCN__GBC__*.h5 left over from a --gbc-dipole lumped run would
-    # otherwise be summed alongside the three split records and silently DOUBLE
-    # COUNT the GBC. gbc_dipole picks which representation to use; 'split'
-    # falls back to the lumped record if no split records exist.
-    _GBC_SPLIT = set(P.GBC_SPLIT_GROUPS)
-    gbc_split_present = False
-    for path in record_paths:
-        a, _p, _r = io_utils.read_dipole_record(path)
-        if a['nucleus'] == 'AVCN' and a['generator'] in _GBC_SPLIT:
-            gbc_split_present = True
-            break
-    use_split = (gbc_dipole == 'split') and gbc_split_present
+    gbc_seen, avcn_seen = False, False
 
     cand = {}    # (nucleus, generator, side) to {condition: record}
     srates = set()
+    anf_wave1_seen = set()      # wave I representations actually COLLECTED
+    anf_wave1_on_disk = {}      # every one present, to name in an error
+    anf_any_on_disk = False
     for path in record_paths:
         attrs, p_head, r_dipole = io_utils.read_dipole_record(path)
         nucleus, generator = attrs['nucleus'], attrs['generator']
         side, cond = attrs['side'], attrs['condition']
+        name = os.path.basename(path)
+        if nucleus != 'ANF' and generator not in KNOWN_GENERATORS.get(nucleus, ()):
+            print(f'  [discover] skipping {name}: unknown generator {nucleus}:{generator}')
+            continue
+        if attrs.get('syn_weights') != io_utils.SYN_WEIGHTS_TAG:
+            print(f'  [discover] skipping {name}: written with other synaptic weights; re-run it')
+            continue
+        if attrs.get('n_cells') != attrs.get('n_total'):
+            print(f'  [discover] warning: {name} is at {attrs.get("n_cells")} of '
+                  f'{attrs.get("n_total")} cells; amplitude ratios are not physical')
         if want_nuclei and nucleus not in want_nuclei:
             continue
         if side not in want_sides:
             continue
-        if nucleus == 'LSO' and generator != lso_generator:
-            continue   # keep only the requested LSO drive (mutually exclusive)
-        if nucleus == 'AVCN' and generator == P.GBC_LUMPED_GROUP and use_split:
-            continue   # split records supersede the lumped one (see above)
-        if nucleus == 'AVCN' and generator in _GBC_SPLIT and not use_split:
-            continue   # lumped requested: drop the split records
         if mono is not None:
-            # monaural: keep only the ear-driven hemisphere for AVCN/MNTB
-            if nucleus == 'AVCN' and side != mono[0]:
+            # Monaural: AVCN and ANF keep the ear-driven side, MNTB the opposite
+            # one (the GBC -> calyx projection decussates).
+            if nucleus in ('AVCN', 'ANF') and side != mono[0]:
                 continue
             if nucleus == 'MNTB' and side != mono[1]:
                 continue
+        if nucleus == 'ANF':
+            anf_any_on_disk = True
+            if generator not in P.ANF_STATIONARY_GROUPS:
+                anf_wave1_on_disk.setdefault(
+                    generator, P.ANF_WAVE1_GROUPS.get(generator))
+        if nucleus == 'AVCN':
+            avcn_seen = True
+        if nucleus == 'AVCN' and generator in P.GBC_GROUPED_GROUPS:
+            gbc_seen = True
+        # Wave I representations are alternatives: keep only the one selected by
+        # anf_source. Every ANF generator must be declared in P.ANF_WAVE1_GROUPS
+        # or P.ANF_STATIONARY_GROUPS.
+        if nucleus == 'ANF' and generator not in P.ANF_STATIONARY_GROUPS:
+            mode = P.ANF_WAVE1_GROUPS.get(generator)
+            if mode is None:
+                raise ValueError(
+                    f'{os.path.basename(path)}: unknown ANF generator '
+                    f'{generator!r}. Every ANF generator is either a '
+                    f'stationary junction (P.ANF_STATIONARY_GROUPS = '
+                    f'{list(P.ANF_STATIONARY_GROUPS)}) or a wave I '
+                    f'representation, which must be declared in '
+                    f'P.ANF_WAVE1_GROUPS = {P.ANF_WAVE1_GROUPS} together with '
+                    f'the --anf-source mode that selects it. Refusing to '
+                    f'guess: an undeclared generator would be summed on top '
+                    f'of the selected wave I source.')
+            if mode != anf_source:
+                continue
+            anf_wave1_seen.add(generator)
         srates.add(attrs['srate'])
-        cand.setdefault((nucleus, generator, side), {})[cond] = (
-            f'{nucleus}:{generator}', nucleus, side, p_head, r_dipole)
+        # Each bin of an extended record is a source at its own position, under one label.
+        cand.setdefault((nucleus, generator, side), {})[cond] = [
+            (f'{nucleus}:{generator}', nucleus, side, p_head[k], r_dipole[k])
+            for k in range(p_head.shape[0])]
+
+    # Exactly one wave I representation must have been collected.
+    if anf_any_on_disk:
+        if len(anf_wave1_seen) > 1:
+            raise ValueError(
+                f'DOUBLE-COUNTED WAVE I: --anf-source {anf_source!r} collected '
+                f'{sorted(anf_wave1_seen)} from {ddir}. These are ALTERNATIVE '
+                f'representations of the nerve and must never be summed.\n'
+                f'  main_abr_anf.py writes exactly one per run; more than one '
+                f'on disk means a stale leftover from an earlier mode.\n'
+                f'  Delete the ones you are not using (they are regenerable) '
+                f'and re-assemble.')
+        if not anf_wave1_seen:
+            raise ValueError(
+                f'NO WAVE I SOURCE: --anf-source {anf_source!r} selected none '
+                f'of the ANF wave I representations in {ddir}.\n'
+                f'  on disk: {anf_wave1_on_disk or "none"}  (generator -> the '
+                f'--anf-source mode that selects it)\n'
+                f'  The stationary junctions (I_n, II_p) would still be '
+                f'summed, so the composite would silently LOSE wave I while '
+                f'keeping the deflections around it. Pass the matching '
+                f'--anf-source, or re-run main_abr_anf.py in the mode you '
+                f'want.')
+
+    if avcn_seen and not gbc_seen:
+        raise ValueError(f'NO GBC: {ddir} has AVCN records but no GBCsoma/GBCaxon; '
+                         're-run the AVCN (main_abr_avcn.py).')
 
     recs = []
     for by_cond in cand.values():
         if want_condition in by_cond:
-            recs.append(by_cond[want_condition])
+            recs.extend(by_cond[want_condition])
         elif 'binaural' in by_cond:
-            recs.append(by_cond['binaural'])
+            recs.extend(by_cond['binaural'])
     if not recs:
         raise FileNotFoundError(
             f'records exist in {ddir} but none match nuclei={want_nuclei} '
@@ -156,22 +199,18 @@ def _discover(stem, cond_label, want_nuclei, want_sides, want_condition,
 
 
 def assemble(stem, cond_label, want_nuclei, sides, condition,
-             lso_generator='synaptic', band=(150., 3000.),
-             gbc_dipole='lumped'):
-    """Collect dipole records for one stimulus and superpose them.
-
-    cond_label is the stimulus label the producers filed their records under
-    ('angle0', 'itd500us', 'ild-10dB'); condition is the acoustic condition
-    ('binaural', 'left_ear', 'right_ear').
+             band=P.BAND_DEFAULT,
+             anf_source='boundary', variant=None):
+    """Collect the dipole records of one stimulus and superpose them.
 
     Returns (V_gen, V_nuc, srate): V_gen maps 'nucleus:generator' and
-    'composite' to band-passed (n_e, T) µV; V_nuc maps nucleus to summed µV.
-    Reused by main() and by the Curio & Weigel BI reproduction (main_abr_bi.py).
+    'composite' to band-passed (n_electrodes, T) µV; V_nuc maps nucleus to its
+    summed µV.
     """
     lo, hi = band
     recs, srate = _discover(stem, cond_label, want_nuclei, set(sides), condition,
-                            lso_generator=lso_generator,
-                            gbc_dipole=gbc_dipole)
+                            anf_source=anf_source,
+                            variant=variant)
     V_gen = head_model.superpose_sources(
         [(label, p_head, r) for (label, _nuc, _side, p_head, r) in recs],
         ELECTRODES, srate, lo=lo, hi=hi)
@@ -185,52 +224,6 @@ def assemble(stem, cond_label, want_nuclei, sides, condition,
             continue
         V_nuc[nuc_of[label]] = V_nuc[nuc_of[label]] + V
     return V_gen, dict(V_nuc), srate
-
-
-_derive = derive
-
-
-COMPOSITE_COLOUR = '#5A3A22'      # dark brown
-
-
-def _plot(out_dir, V_gen, V_nuc, srate, side, derivation):
-    """Three stacked panels.
-
-    The middle one repeats the decomposition without the composite: the
-    composite is the largest trace and rescales the shared y-axis, so on the
-    top panel the smaller nuclei are unreadable. Dropping it lets the axis
-    fit the generators themselves.
-    """
-    t = time_axis(V_gen['composite'].shape[1], srate)
-    cz = ELECTRODES.index('Cz')
-    fig, (ax0, axn, ax1) = plt.subplots(3, 1, figsize=(9, 11.5),
-                                        constrained_layout=True)
-
-    for nuc in sorted(V_nuc):
-        ax0.plot(t, V_nuc[nuc][cz], lw=0.9, label=nuc)
-    ax0.plot(t, V_gen['composite'][cz], color='k', lw=1.6, label='composite', zorder=5)
-    ax0.axhline(0, color='k', lw=0.4, ls=':')
-    ax0.set_xlabel('Time (ms)'); ax0.set_ylabel('Cz potential (µV)')
-    ax0.set_title(f'composite ABR AND per-nucleus decomposition (Cz)  |  side {side}')
-    ax0.legend(fontsize=8, ncol=2)
-
-    for nuc in sorted(V_nuc):
-        axn.plot(t, V_nuc[nuc][cz], lw=1.0, label=nuc)
-    axn.axhline(0, color='k', lw=0.4, ls=':')
-    axn.set_xlabel('Time (ms)'); axn.set_ylabel('Cz potential (µV)')
-    axn.set_title(f'per-nucleus decomposition only (Cz)  |  side {side}')
-    axn.legend(fontsize=8, ncol=2)
-
-    diff, lbl = _derive(V_gen['composite'], ELECTRODES, derivation)
-    ax1.plot(t, diff, color=COMPOSITE_COLOUR, lw=1.1, label=f'composite {lbl}')
-    ax1.axhline(0, color='k', lw=0.4, ls=':')
-    ax1.set_xlabel('Time (ms)'); ax1.set_ylabel('Amplitude (µV)')
-    ax1.set_title(f'Composite ABR {lbl}  (vertex-positive upward)')
-    ax1.legend(fontsize=9)
-
-    path = os.path.join(out_dir, 'figures', 'full_abr.png')
-    fig.savefig(path, dpi=150); plt.close(fig)
-    print(f'figure saved to {path}')
 
 
 def _summary(V_nuc, V_gen, srate):
@@ -266,25 +259,19 @@ def main():
     ap.add_argument('--ild-db', type=float, default=None, dest='ild_db',
                     help='artificial ILD in dB; overrides --itd-us and --angle.')
     ap.add_argument('--side',     type=str, default='both', choices=['L', 'R', 'both'])
-    ap.add_argument('--nuclei',   type=str, default=None,
-                    help='comma-separated subset (e.g. MSO,AVCN); default = all present')
-    ap.add_argument('--derivation', type=str, default='Cz-M1',
-                    choices=['Cz-M1', 'Cz-M2', 'Cz-avg'])
     ap.add_argument('--condition', type=str, default='binaural',
                     choices=['binaural', 'left_ear', 'right_ear'],
                     help='acoustic condition: picks condition-specific MSO/LSO '
                          'records, falling back to binaural for AVCN/MNTB')
-    ap.add_argument('--lso-generator', type=str, default='synaptic',
-                    choices=['spiking', 'synaptic'], dest='lso_generator',
-                    help='which LSO generator to include (alternatives, not summed)')
-    ap.add_argument('--gbc-dipole', type=str, default='lumped',
-                    choices=['split', 'lumped'], dest='gbc_dipole',
-                    help='which GBC representation to include (alternatives, '
-                         'never summed): lumped (default) = the single '
-                         'whole-cell GBC record, split = GBCsyn+GBCspike+'
-                         'GBCtrunk')
-    ap.add_argument('--band', type=str, default='150,3000',
-                    help='band-pass lo,hi in Hz (default 150,3000)')
+    ap.add_argument('--anf-source', type=str, default='boundary',
+                    choices=['full', 'boundary'], dest='anf_source',
+                    help='ANF representation to assemble; must match the one '
+                         'main_abr_anf.py wrote (default boundary)')
+    ap.add_argument('--variant', default=None,
+                    help='dipole-record variant to assemble; "chain" reads the '
+                         'NEURON_chain records instead of the NEST-driven ones. '
+                         'The two never share a directory, so no exclusivity '
+                         'rule is needed between them.')
     ap.add_argument('--out-dir', type=str, default=None, dest='out_dir',
                     help='write here instead of the derived '
                          'RESULTS/full_abr/<stem>_<cond>_<side>[...] name. A '
@@ -296,23 +283,20 @@ def main():
     stem  = _pic_stem(pic_file)
     _, cond_label = paths.condition_key(args.angle, args.itd_us, args.ild_db)
     sides = ['L', 'R'] if args.side == 'both' else [args.side]
-    want_nuclei = (set(n.strip() for n in args.nuclei.split(',')) if args.nuclei
-                   else None)
-    lo, hi = (float(x) for x in args.band.split(','))
+    lo, hi = P.BAND_DEFAULT
 
-    V_gen, V_nuc, srate = assemble(stem, cond_label, want_nuclei, sides,
-                                   args.condition, lso_generator=args.lso_generator,
-                                   band=(lo, hi), gbc_dipole=args.gbc_dipole)
-    print(f'collected generators ({args.condition}, LSO={args.lso_generator}, '
-          f'GBC={args.gbc_dipole}): '
+    V_gen, V_nuc, srate = assemble(stem, cond_label, None, sides,
+                                   args.condition,
+                                   anf_source=args.anf_source, variant=args.variant)
+    print(f'collected generators ({args.condition}): '
           f'{sorted(k for k in V_gen if k != "composite")}')
 
     cond_tag = '' if args.condition == 'binaural' else f'_{args.condition}'
-    lso_tag  = '' if args.lso_generator == 'spiking' else f'_lso{args.lso_generator}'
-    gbc_tag  = '' if args.gbc_dipole == 'lumped' else f'_gbc{args.gbc_dipole}'
-    # cond_label names the dipole set this composite was built from
-    # (RESULTS/abr_tmp/dipoles/<stem>_<cond_label>).
-    default_name = f'{stem}_{cond_label}_{args.side}{cond_tag}{lso_tag}{gbc_tag}'
+    # Directory tags: ANF representation and record set.
+    anf_tag  = '' if args.anf_source == 'boundary' else f'_anf{args.anf_source}'
+    variant_tag = '' if not args.variant else f'_{args.variant}'
+    default_name = (f'{stem}_{cond_label}_{args.side}{cond_tag}'
+                    f'{anf_tag}{variant_tag}')
     if args.out_dir:
         # absolute/relative path as given; a bare name lands in RESULTS/full_abr/
         target = (args.out_dir if os.path.sep in args.out_dir
@@ -332,11 +316,10 @@ def main():
         # ipsilateral mastoid without parsing the directory name.
         f.attrs.update(units='µV', stem=stem, cond_label=cond_label,
                        side=args.side, condition=args.condition,
-                       lso_generator=args.lso_generator, band=f'{lo}-{hi} Hz')
+                       band=f'{lo}-{hi} Hz')
     print(f'ABR_full.h5 saved to {out_dir}')
 
     _summary(V_nuc, V_gen, srate)
-    _plot(out_dir, V_gen, V_nuc, srate, args.side, args.derivation)
 
 
 if __name__ == '__main__':

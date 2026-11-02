@@ -5,40 +5,84 @@
 // LFP pipeline it is a co-located auxiliary population driven by the same
 // contralateral GBC spike train; its transmembrane current, a giant
 // presynaptic AP, is the extracellular prespike that in vivo precedes the MNTB
-// spike by ~0.5 ms and shapes ABR wave III. Its dipole sums with the principal
+// spike by ~0.3 ms and shapes ABR wave III. Its dipole sums with the principal
 // cell's by linear superposition, at the same probe and head position.
 //
-// Geometry (Karadas 2021 [4]; Kulesza / Sierksma [7]):
-//   The calyx engulfs more than half the MNTB soma. Karadas idealise it as a
-//   half-ring (ring dia 13 um, wall 2 um), but that thin arc (~126 um2)
-//   understates the apposed area and so both the prespike and the cleft
-//   potential. It is modelled here as the engulfing cup: a cylinder dia 8 um,
-//   length 20 um along z (area ~500 um2, about half the 1257 um2 soma).
-//   precalyx_axon is the final unmyelinated pre-terminal segment, with high Na,
-//   and is the primary presynaptic current sink (Karadas: the pre-calyx axon
-//   Na at ~0.2 nS/um2 = 0.02 S/cm2 generates the prespike sink). It runs along
-//   +x (mediolateral), the GBC axon's approach across the midline.
+// ===========================================================================
+// WHERE THIS CELL BEGINS, AND WHY THERE IS NO HEMINODE HERE
+// ===========================================================================
+// The GBC->MNTB axon is split between TWO generators, and the boundary is the
+// HEMINODE -- the anatomical point where saltatory conduction ends and
+// continuous invasion of the terminal begins:
 //
-// Channel densities at the terminal face (Karadas [4], converted pS/um2 to
-//   S/cm2, where 1 nS/um2 = 0.1 S/cm2):
+//   AVCN:GBC     soma -> dendrites -> AIS -> myelin -> internodes/nodes ->
+//                HEMINODE INCLUSIVE        (models/avcn/axon_builder.py)
+//   MNTB:calyx   post-heminode neck -> terminal arbor        (THIS FILE)
+//
+// Nothing is modelled twice. The heminode is built by axon_builder and is NOT
+// recreated here, so the composite ABR cannot double count that membrane.
+// `neck` starts exactly where the trunk stops, and the GBC drive is delivered
+// at neck(0) -- the heminode boundary -- at params.CALYX_DELAYS, which carries
+// the full axonal crossing (GBC_MNTB_CONDUCTION_MS) and nothing else.
+//
+// (Was: a 25 um x 1.5 um `precalyx_axon` driven mid-section, with no stated
+// boundary against the trunk and a 0.05 ms delay that had the terminal firing
+// half a millisecond before the action potential could have arrived.)
+//
+// KNOWN LIMITATION, deliberate. The two populations are electrically separate
+// LFPy cells, so the terminal is invaded by a synaptic conductance at neck(0)
+// rather than by an action potential arriving out of the trunk's heminode. The
+// invasion time and dV/dt therefore come from this cable, not from propagation.
+// Fusing them would mean one cell spanning two nuclei, which the per-nucleus
+// dipole-record architecture does not allow.
+//
+// ===========================================================================
+// GEOMETRY (human)
+// ===========================================================================
+//   neck    the unmyelinated post-heminode segment, 15 um x 4.0 um. (Was
+//           25 um x 1.5 um -- ~3x too thin.) It is the primary presynaptic
+//           current sink: Na at ~0.2 nS/um2 = 0.02 S/cm2 (Karadas 2021), here
+//           raised nodally so invasion is reliable.
+//
+//   digit_0..5   the terminal arbor. The human calyx is NOT the rodent's
+//           closed cup: it is a fenestrated, digitated network covering 60-80%
+//           of the postsynaptic somatic perimeter, so its apposed surface area
+//           (1000-1800 um2) EXCEEDS what a smooth cup around a 20-25 um soma
+//           could provide. A single cylinder cannot represent that: in a 1-D
+//           cable `diam` fixes area, axial resistance and spatial extent at
+//           once. Six parallel digits resolve it -- each 20 um along z (so the
+//           20 um extent, hence the dipole moment arm, is preserved) and
+//           3.71 um across, on an 11 um radius spanning 240 deg (67% of the
+//           perimeter). Total 1400 um2, mid-range of the human estimate.
+//
+//           (Was: ONE cylinder, 8 um x 20 um = 502 um2, i.e. 2-3.6x too little
+//           apposed membrane and 4-7x too little total membrane. The prespike
+//           is a transmembrane current, so it scaled with that deficit.)
+//
+// Channel densities at the terminal face (Karadas 2021, pS/um2 -> S/cm2,
+//   1 nS/um2 = 0.1 S/cm2):
 //     Na  200 pS/um2 -> 0.020 S/cm2   (Ca 40 pS/um2 omitted: no Ca mod in
 //     KLT 240 pS/um2 -> 0.024 S/cm2    models/mso, and Na dominates the field)
 //     KHT  80 pS/um2 -> 0.008 S/cm2
-//   The precalyx_axon uses a higher nodal Na so it reliably spikes and drives
-//   the terminal. Fast Na is namntb (models/mntb/namntb.mod); klt and kht
-//   kinetics come from models/mso.
+//   Fast Na is namntb (models/mntb/namntb.mod); klt and kht come from
+//   models/mso.
 //
-// The cleft leak conductance g_cl ~ 1.0 uS (R_cleft ~ 1 MOhm; Sierksma 2021
-// [7]) is applied in the LFP and validation drivers through NEURON's
-// extracellular mechanism (xg set so xg*area = g_cl), giving a cleft node
-// whose potential rises several mV during the presynaptic AP.
+// The cleft leak conductance g_cl ~ 1.0 uS (R_cleft ~ 1 MOhm; Sierksma 2021)
+// is applied in the LFP and validation drivers through NEURON's extracellular
+// mechanism (xg set so xg*area = g_cl).
 
-create precalyx_axon, calyx
+create neck, digit[6]
 
-access precalyx_axon
+objref Calyx_Neck, Calyx_Arbor
+Calyx_Neck  = new SectionList()
+Calyx_Arbor = new SectionList()
 
-// Pre-terminal axon (+x -> origin), high Na = primary presynaptic sink
-precalyx_axon {
+access neck
+
+// Post-heminode unmyelinated neck (+x -> origin), high Na = presynaptic sink.
+// Driven at neck(0), the heminode boundary.
+neck {
+    Calyx_Neck.append()
     nseg = 5
     Ra   = 150
     cm   = 1.0
@@ -48,18 +92,17 @@ precalyx_axon {
     insert namntb
     gbar_namntb = 0.30
     ena = 55.0
-    insert kht
-    gbar_kht = 0.015
-    insert klt
-    gbar_klt = 0.010
+    insert kht_mntb
+    gbar_kht_mntb = 0.015
+    insert klt_mntb
+    gbar_klt_mntb = 0.010
     ek = -77.0
-    pt3dadd(30, 0, 0, 1.5)
-    pt3dadd( 5, 0, 0, 1.5)
+    pt3dadd(15, 0, 0, 4.0)
+    pt3dadd( 0, 0, 0, 4.0)
 }
 
-// Calyx terminal (half-ring, arc ~20 um along z, tube dia 2 um), apposed to soma
-calyx {
-    nseg = 5
+proc digit_biophys() {
+    nseg = 3
     Ra   = 150
     cm   = 1.0
     insert pas
@@ -68,13 +111,22 @@ calyx {
     insert namntb
     gbar_namntb = 0.020
     ena = 55.0
-    insert klt
-    gbar_klt = 0.024
-    insert kht
-    gbar_kht = 0.008
+    insert klt_mntb
+    gbar_klt_mntb = 0.024
+    insert kht_mntb
+    gbar_kht_mntb = 0.008
     ek = -77.0
-    pt3dadd(0, 0, -10, 8)
-    pt3dadd(0, 0,  10, 8)
 }
 
-connect calyx(0), precalyx_axon(1)
+// Six digits of the fenestrated arbor, each 20 um along z at 11 um radius,
+// spanning 240 deg of the soma perimeter. Total apposed area 1400 um2.
+digit[0] { Calyx_Arbor.append() digit_biophys() pt3dadd(-5.500,  -9.526, -10, 3.71) pt3dadd(-5.500,  -9.526, 10, 3.71) }
+digit[1] { Calyx_Arbor.append() digit_biophys() pt3dadd( 3.399, -10.462, -10, 3.71) pt3dadd( 3.399, -10.462, 10, 3.71) }
+digit[2] { Calyx_Arbor.append() digit_biophys() pt3dadd(10.049,  -4.474, -10, 3.71) pt3dadd(10.049,  -4.474, 10, 3.71) }
+digit[3] { Calyx_Arbor.append() digit_biophys() pt3dadd(10.049,   4.474, -10, 3.71) pt3dadd(10.049,   4.474, 10, 3.71) }
+digit[4] { Calyx_Arbor.append() digit_biophys() pt3dadd( 3.399,  10.462, -10, 3.71) pt3dadd( 3.399,  10.462, 10, 3.71) }
+digit[5] { Calyx_Arbor.append() digit_biophys() pt3dadd(-5.500,   9.526, -10, 3.71) pt3dadd(-5.500,   9.526, 10, 3.71) }
+
+for i = 0, 5 { connect digit[i](0), neck(1) }
+
+access neck

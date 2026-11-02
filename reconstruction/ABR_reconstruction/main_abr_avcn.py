@@ -1,30 +1,19 @@
 #!/usr/bin/env python3
-"""
-AVCN ABR reconstruction: current dipole moment through the 4-sphere head model.
+"""AVCN ABR: globular (GBC) and spherical (SBC) bushy-cell populations through
+the 4-sphere head model.
 
-The cochlear nucleus is an early ABR generator (human wave III), upstream of
-the MSO. This mirrors main_abr.py but drives morphologically detailed
-bushy-cell populations (AVCNPopulation, ANF endbulb input) and places each
-dipole at the cochlear-nucleus location.
+  GBC   Type II, VCN_c09 EM morphology with an extended axon to the MNTB
+  SBC   Type II-I, SBC_S113 morphology, ~1.5 mm rostral of the GBC field
 
-Two generators are modelled and unified at the ABR stage:
-  GBC   globular bushy cell (Type II, VCN_c09 EM), central/caudal VCN
-  SBC   spherical bushy cell (Type II-I, SBC_S113 EM), rostral VCN
-The spherical-cell area occupies the rostral 1.5-2.0 mm of the nucleus before
-the globular region, so the SBC dipole sits ~1.5 mm anterior (+head_y) of the
-GBC. Each population's dipole is projected through the 4-sphere model from its
-own position and the scalp potentials are summed, since a plain vector sum of
-the two dipole moments would only be valid for co-located sources.
+The GBC dipole is recorded as two edge groups (GBCsoma, GBCaxon, see
+recon_core/physics/tree_dipole.py), each projected from its measured centroid;
+the SBC as one whole-cell dipole at its own position.
 
-CLI (single or MPI):
-  python ABR_reconstruction/main_abr_avcn.py --pic-file RESULTS/x.pic \
-      --angle 0 --side L --n-cells 200 --generators both
-  mpiexec -n 4 python ABR_reconstruction/main_abr_avcn.py ... --side both
+  mpiexec -n 4 python ABR_reconstruction/main_abr_avcn.py --pic-file RESULTS/<f>.pic \
+      --angle 0 --side both --full-n
 
-Outputs:
-  RESULTS/abr_tmp/output_{pop}_{stem}_angle{A}_{side}/population_dipole.h5
-  RESULTS/abr_tmp/output_avcn_{stem}_angle{A}_{sidespec}/ABR.h5   (per-pop + composite)
-  .../figures/avcn_abr.png                                        (SBC/GBC/composite)
+Outputs: RESULTS/abr_tmp/output_{gbc,sbc,avcn}_<stem>_<stimulus>_<side>/
+(population dipoles, ABR.h5, figures) and the dipole records.
 """
 
 import os
@@ -40,17 +29,18 @@ import matplotlib.pyplot as plt
 
 import hybridLFPy
 
-from recon_core import head_model, params as P, paths
-from recon_core.io_utils import save_dipole_record
-from recon_core.mpi_utils import COMM, RANK, broadcast_from_root, reduce_sum
-from recon_core.signal_utils import derive
+from recon_core.physics import head_model
+from recon_core.config import params as P
+from recon_core.utils import paths
+from recon_core.utils.io_utils import save_dipole_record
+from recon_core.utils.mpi_utils import COMM, RANK, broadcast_from_root, reduce_sum
+from recon_core.utils.signal_utils import derive
+from ABR_reconstruction.plots.common import nucleus_colour
 
 # AVCN populations + geometry (importing this also loads the mechanisms).
 from LFP_reconstruction.main_reconstruct_avcn import (
-    GBCSynapticPopulation, GBCSpikingPopulation,
     AVCNPopulation, ELLIPSE_RADIUS_X, ELLIPSE_RADIUS_Y, LAYER_BOUNDARIES, K_YXL,
-    _decorate, SYN_DELAY_LOC, SYN_DELAY_SCALE, AXON_TARGET,
-)
+    _decorate, SYN_DELAY_LOC, SYN_DELAY_SCALE, AXON_TARGET, GBCGroupedPopulation)
 from LFP_reconstruction import main_reconstruct_sbc as sbc      # SBC deltas
 from LFP_reconstruction.main_reconstruct import _extract_spikes
 
@@ -58,15 +48,8 @@ DT, TSTOP, SRATE = P.DT, P.TSTOP, P.SRATE
 V_INIT = P.GBC_V_INIT
 N_GBC_TOTAL, N_ENDBULBS = P.N_GBC_TOTAL, P.GBC_ENDBULBS
 
-# The rotation is side-specific so the GBC axon, aligned ventromedially in the
-# model frame by set_rotations (AXON_TARGET = [-1, 0, -1]), crosses the midline
-# on both sides. It also carries the ~32.5 deg outward rostral tilt of the
-# human cochlear nucleus (Moore/Osen). _build_rotation(tilt) rebuilds it for
-# --avcn-tilt-deg.
-from recon_core.head_geometry import (
-    AVCN_ROSTRAL_TILT_DEG, build_avcn_rotation as _build_rotation,
-)
-
+# Side-specific rotation: the GBC axon crosses the midline on both sides, and the
+# nucleus carries the outward rostral tilt of the human cochlear nucleus.
 AVCN_POS_UM = P.AVCN_POS_UM
 SBC_POS_UM = P.SBC_POS_UM
 ROTATION = P.ROTATION_AVCN
@@ -82,94 +65,27 @@ def superpose_sources(sources, electrode_names, hi=3000., lo=150.):
 
 
 # ---------------------------------------------------------------------------
-# Why the dipole IS split -- and why it once was not
-#
-# The old prohibition was about the WRONG kind of grouping, and the distinction
-# is SEGMENTS vs EDGES.
-#
-# Grouping SEGMENTS is invalid. p = sum(r * i) is translation invariant, and so
-# well defined, only when the group's net current is zero. Measured here:
-#
-#   sum of i_membrane over all segments = 3.0 nA (the injected current; the
-#                                         cell as a whole conserves charge)
-#   sum over the axonal segments alone  = 3.2 nA (not zero)
-#
-# Each sub-group carries a large net current, so its dipole is origin dependent,
-# and displacing two such groups drops the monopole terms -- with q_axon =
-# -q_syn separated by d ~ 3.5 mm the dropped term is itself a large dipole q*d.
-# That is what produced the spurious anti-phase cancellation.
-#
-# Grouping EDGES is valid. With I_j = sum over subtree(j) of i_k, charge
-# conservation gives p = sum_j I_j (r_j - r_par(j)): every term is a current
-# times a DISPLACEMENT, so every term is individually origin-independent, and
-# therefore so is any subset sum. That is the Naess et al. 2021 multi-dipole
-# formulation; recon_core/tree_dipole.py implements it from imem and agrees with
-# pos.T @ imem to 1.6e-15. See that module for the full argument.
-#
+# Population registry: what differs between GBC and SBC. 'parts' lists the
+# dipole sources of a population with their head positions; 'run' replaces it
+# for the GBC, whose two edge groups sit at measured centroids.
 # ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Population registry: everything that differs between GBC and SBC. Defaults in
-# AVCNPopulation reproduce the GBC pipeline, so the GBC entry mostly names them.
-#
-# 'parts' lists the dipole sources a population contributes, each with its own
-# head position; 'runs' replaces it for the split GBC, whose positions are
-# MEASURED rather than tabulated. The SBC and the lumped GBC each contribute one
-# whole-cell dipole, differing in position (SBC 1.5 mm rostral) and in
-# morphology: the GBC uses the extended active axon, so its dipole carries the
-# travelling volley.
-# ---------------------------------------------------------------------------
-def _decorate_no_na(cell):
-    """LFPy custom_fun for Run A: cnmodel GBC densities with sodium OMITTED.
-
-    decorate_gbc skips `insert` when gbar <= 0, so nacncoop is simply absent --
-    no window current, no ena. Every other channel stays: KLT in particular is
-    what makes the GBC's EPSP phasic.
-    """
-    import gbc_biophysics
-    gbc_biophysics.decorate_gbc(cell, set_nseg=False,
-                                ref_ns=gbc_biophysics.REF_NS_II_NONA)
-
-
 GBC_EXTENDED_HOC = os.path.join(paths.AVCN_MODELS_DIR, 'morphology',
                                 'extended', 'VCN_c09_extended_axon.hoc')
 
 POPULATIONS = {
-    # SPLIT, opt-in via --gbc-dipole split: two simulations of the same
-    # morphology, three grouped dipoles. "Na absent" and "an injected AP that
-    # must propagate" cannot both hold in one run, hence two. Both use the same
-    # POPULATIONSEED so the cell positions match cell-for-cell (asserted in
-    # _run_split). Costs 1.7x runtime; agrees with lumped to 1% binaurally but
-    # differs ~22% monaurally (the superposition bias, which the bilateral
-    # cancellation hides).
+    # One endbulb-driven run recorded as two edge groups (GBCsoma, GBCaxon) that
+    # partition the cell.
     'gbc': dict(
         label='GBC', morphology=GBC_EXTENDED_HOC, decorate=_decorate,
         n_post_total=N_GBC_TOTAL, n_endbulbs=N_ENDBULBS, endbulb_weights=None,
         per_pop_syn=AVCNPopulation.PER_POP_SYN, k_yxl=K_YXL,
         ellipse_y=ELLIPSE_RADIUS_Y, seed=44,
         parts=None,                 # positions are MEASURED, not tabulated
-        runs=[
-            dict(tag='syn', pop_class=GBCSynapticPopulation, X='ANF',
-                 decorate=_decorate_no_na, k_yxl=K_YXL,
+        run=dict(tag='grouped', pop_class=GBCGroupedPopulation, X='ANF',
+                 decorate=_decorate, k_yxl=K_YXL,
                  per_pop_syn=AVCNPopulation.PER_POP_SYN,
                  delays=P.GBC_DELAYS, delay_scale=P.SYN_DELAY_SCALE,
-                 groups=('GBCsyn',)),
-            dict(tag='spike', pop_class=GBCSpikingPopulation, X='GBC',
-                 decorate=_decorate, k_yxl=P.GBC_SPIKING_CONVERGENCE,
-                 per_pop_syn=P.GBC_SPIKING_SYNAPSES,
-                 delays=P.GBC_SPIKING_DELAYS, delay_scale=[None],
-                 groups=('GBCspike', 'GBCtrunk')),
-        ],
-    ),
-    # DEFAULT. One whole-cell CurrentDipoleMoment at the nucleus centre, spike
-    # timing from NEURON -- the pipeline's long-standing behaviour, unchanged.
-    'gbc_lumped': dict(
-        label='GBC', morphology=GBC_EXTENDED_HOC, decorate=_decorate,
-        n_post_total=N_GBC_TOTAL, n_endbulbs=N_ENDBULBS, endbulb_weights=None,
-        per_pop_syn=AVCNPopulation.PER_POP_SYN, k_yxl=K_YXL,
-        ellipse_y=ELLIPSE_RADIUS_Y, seed=44,
-        parts=[('GBC', None, AVCN_POS_UM)],   # whole-cell dipole, axon included
+                 groups=P.GBC_GROUPED_GROUPS),
     ),
     'sbc': dict(
         label='SBC', morphology=sbc.HOC_FILE_SBC, decorate=sbc._decorate_sbc,
@@ -194,15 +110,19 @@ def _n_cells(args, cfg):
     each population from its own `n_post_total` (mirrored live from POP_NUM),
     which is what a physically-weighted composite requires.
     """
-    return cfg['n_post_total'] if getattr(args, 'full_n', False) else args.n_cells
+    if getattr(args, 'n_cells', None) is not None:
+        return args.n_cells          # explicit --n-cells N: a small-N probe
+    return cfg['n_post_total']       # DEFAULT: each population at its own full N
 
 
-def _run_one_grouped(run, cfg, pop_name, side, args, meta):
-    """One simulation of a grouped-dipole run. -> (moments, centroids, out_dir).
+def _run_grouped(pop_name, side, args, meta):
+    """The grouped GBC simulation. -> (moments, centroids, out_dir, soma_pos).
 
     Returns model-frame centroids; _project_and_save rotates them with the same
     matrix as the moments (head_model.rotate_offset_to_head).
     """
+    cfg = POPULATIONS[pop_name]
+    run = cfg['run']
     X_pops = [f'{run["X"]}_{side}']
     k_arr = np.array(run['k_yxl'])
     n_syn_per_pop = {X: int(k_arr[:, j].sum()) for j, X in enumerate(X_pops)}
@@ -224,7 +144,7 @@ def _run_one_grouped(run, cfg, pop_name, side, args, meta):
 
     pop = run['pop_class'](
         n_syn_per_pop=n_syn_per_pop,
-        axon_target=AXON_TARGET,
+        axon_target=AXON_TARGET[side],
         n_post_total=cfg['n_post_total'],
         n_endbulbs=cfg['n_endbulbs'],
         endbulb_weights=cfg['endbulb_weights'],
@@ -251,7 +171,7 @@ def _run_one_grouped(run, cfg, pop_name, side, args, meta):
         savelist=['somapos'],
         savefolder=output_dir,
         dt_output=DT,
-        POPULATIONSEED=cfg['seed'],     # SAME for both runs -> same positions
+        POPULATIONSEED=cfg['seed'],
         X=X_pops,
         networkSim=networkSim,
         k_yXL=run['k_yxl'],
@@ -278,10 +198,7 @@ def _run_one_grouped(run, cfg, pop_name, side, args, meta):
         if loc_p is None:
             loc_p = np.zeros((3, n_t))
             loc_c = np.zeros(3)
-        # reduce_sum returns None on non-root ranks (mpi_utils.py:70), so the
-        # weighted-centroid division MUST be guarded -- doing it unguarded
-        # raises on every non-root rank and deadlocks the rest in the next
-        # collective. Only rank 0 uses the centroids (_project_and_save).
+        # reduce_sum returns None off rank 0: guard the centroid division.
         moments[g] = reduce_sum(loc_p)
         tot_c = reduce_sum(loc_c)
         tot_w = reduce_sum(np.array([loc_w]))
@@ -290,30 +207,6 @@ def _run_one_grouped(run, cfg, pop_name, side, args, meta):
             centroids[g] = (tot_c / tot_w[0]) if tot_w[0] > 0 else np.zeros(3)
     COMM.Barrier()
     return moments, centroids, output_dir, pop.pop_soma_pos
-
-
-def _run_split(pop_name, side, args, meta):
-    """Both runs of the split GBC generator, merged."""
-    cfg = POPULATIONS[pop_name]
-    moments, centroids, out_dir, ref_pos = {}, {}, None, None
-    for run in cfg['runs']:
-        m, c, d, soma_pos = _run_one_grouped(run, cfg, pop_name, side, args, meta)
-        if ref_pos is None:
-            ref_pos, out_dir = soma_pos, d
-        elif RANK == 0:
-            # Both runs must place their cells identically, or the two dipoles
-            # describe different populations and the soma-centred centroids are
-            # inconsistent. Cheap, and it catches a whole class of future edits.
-            same = all(np.allclose([ref_pos[i][k] for k in 'xyz'],
-                                   [soma_pos[i][k] for k in 'xyz'])
-                       for i in range(len(ref_pos)))
-            if not same:
-                raise RuntimeError(
-                    'the split GBC runs placed their cells differently; they '
-                    'must share POPULATIONSEED and populationParams')
-        moments.update(m)
-        centroids.update(c)
-    return moments, centroids, out_dir
 
 
 def _run_one_source(pop_name, side, args, meta):
@@ -355,7 +248,7 @@ def _run_one_source(pop_name, side, args, meta):
     pop_label = f'{cfg["label"]}_{side}'
     pop = AVCNPopulation(
         n_syn_per_pop=n_syn_per_pop,
-        axon_target=AXON_TARGET,   # fixed ventromedial, laterality via X_pops
+        axon_target=AXON_TARGET[side],   # atlas chord to the contra MNTB
         n_post_total=cfg['n_post_total'],
         n_endbulbs=cfg['n_endbulbs'],
         endbulb_weights=cfg['endbulb_weights'],
@@ -414,20 +307,10 @@ def _run_one_source(pop_name, side, args, meta):
 # ---------------------------------------------------------------------------
 # Head-model projection and saving (rank 0)
 # ---------------------------------------------------------------------------
-# Settling transient. finitialize starts every cell at V_INIT, which is not its
-# equilibrium, so the first timestep carries a large whole-cell relaxation
-# current: measured 147,034 nA·µm at t=0 against a 179,345 nA·µm wave-II peak,
-# collapsing 29x within 0.1 ms. The zero-phase band-pass rings off that impulse
-# into a lobe at ~0.16 ms which is 85% of the real wave II (0.70 vs 0.82 nV at
-# Cz) and sits exactly where wave I would be -- the one wave this pipeline does
-# not model, so it is mistakable for one.
-#
-# The window is DERIVED, not chosen: ANF spikes cannot occur before t = 0, so no
-# synaptically driven AVCN current can precede the endbulb delay. Everything
-# before min(ANFs2GBCs, ANFs2SBCs) is provably non-neural, whatever the stimulus.
-#
-# NOT P.SETTLE_MS (3.0 ms): that is safe for the LSO, whose NEST spikes start
-# after 6 ms, but it would erase the AVCN's 2.5 ms wave II outright.
+# Settling transient: cells start at V_INIT, not at equilibrium, and the first
+# steps carry a large relaxation current that the band-pass would ring into a
+# spurious early lobe. No synaptically driven current can precede the endbulb
+# delay, so everything before it is blanked.
 SETTLE_MS = min(P.GBC_DELAYS[0], P.SBC_DELAYS[0])
 
 
@@ -474,7 +357,8 @@ def _apply_head_model(sources, output_dir, electrode_names):
     Returns (V_by_key, srate), where V_by_key maps each part label and
     'composite' to a band-passed (n_electrodes, n_t) array in µV.
     """
-    V_out, srate = superpose_sources(sources, electrode_names, hi=3000., lo=150.)
+    V_out, srate = superpose_sources(sources, electrode_names,
+                                     lo=P.BAND_DEFAULT[0], hi=P.BAND_DEFAULT[1])
 
     with h5py.File(os.path.join(output_dir, 'ABR.h5'), 'w') as f:
         for key, V_uV in V_out.items():
@@ -496,12 +380,12 @@ def _plot_abr(output_dir, V_out, electrode_names, srate, cond_label, side,
     cz_idx = electrode_names.index('Cz')
     any_V  = next(iter(V_out.values()))
     tvec   = np.arange(any_V.shape[1]) / srate * 1e3
-    colours = {'GBC': 'seagreen', 'SBC': 'darkorange', 'composite': 'black'}
 
     fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(9, 7), constrained_layout=True)
     for key, V_uV in V_out.items():
         ax0.plot(tvec, V_uV[cz_idx], lw=1.1 if key == 'composite' else 0.9,
-                 color=colours.get(key, None),
+                 color='black' if key == 'composite'
+                 else nucleus_colour(f'AVCN:{key}'),
                  label=f'{key} (Cz)', zorder=3 if key == 'composite' else 2)
     ax0.axhline(0, color='k', lw=0.4, ls=':')
     ax0.set_ylabel('Cz potential (µV)')
@@ -540,7 +424,8 @@ def main():
     parser.add_argument('--angle',       type=int, default=0)
     parser.add_argument('--side',        type=str, default='L',
                         choices=['L', 'R', 'both'])
-    parser.add_argument('--n-cells',     type=int, default=200, dest='n_cells')
+    # Default (None): full N for each population; see _n_cells.
+    parser.add_argument('--n-cells',     type=int, default=None, dest='n_cells')
     parser.add_argument('--full-n', action='store_true', dest='full_n',
                         help='size each population from its own n_post_total '
                              '(GBC 3600, SBC 28000) instead of the shared '
@@ -552,45 +437,10 @@ def main():
     parser.add_argument('--ild-db', type=float, default=None, dest='ild_db',
                         help='select an artificial-ILD condition (dB); overrides '
                              '--itd-us and --angle.')
-    parser.add_argument('--generators', type=str, default='both',
-                        choices=['gbc', 'sbc', 'both'], dest='generators',
-                        help='which bushy-cell generators to model. They are '
-                             'distinct cell types, so "both" SUMS them at the scalp.')
-    parser.add_argument('--gbc-dipole', type=str, default='lumped',
-                        choices=['split', 'lumped'], dest='gbc_dipole',
-                        help='how the GBC contributes its dipole. lumped '
-                             '(default): one whole-cell GBC record, spike '
-                             'timing from NEURON. split: three grouped records '
-                             'GBCsyn/GBCspike/GBCtrunk from two runs, with NEST '
-                             'spikes driving the axon (1.7x runtime; agrees '
-                             'with lumped to 1%% binaurally but differs ~22%% '
-                             'monaurally). ORTHOGONAL to --generators, which '
-                             'picks the cell type.')
-    parser.add_argument('--derivation',  type=str, default='Cz-M1',
-                        choices=['Cz-M1', 'Cz-M2', 'Cz-avg'])
-    parser.add_argument('--gbc-hoc', type=str, default=None, dest='gbc_hoc',
-                        help='override the GBC morphology (default: extended '
-                             'active axon; pass the plain VCN_c* EM hoc to '
-                             'measure the axonal travelling-wave contribution)')
-    parser.add_argument('--avcn-tilt-deg', type=float, default=AVCN_ROSTRAL_TILT_DEG,
-                        dest='avcn_tilt_deg',
-                        help='outward rostral tilt of the CN about the head '
-                             'vertical axis (deg); 0 = untilted (default %(default)s)')
     args = parser.parse_args()
 
-    global ROTATION
-    ROTATION = _build_rotation(args.avcn_tilt_deg)
-
-    if args.gbc_hoc:
-        POPULATIONS['gbc']['morphology'] = args.gbc_hoc
-
     sides = ['L', 'R'] if args.side == 'both' else [args.side]
-    pops  = ['gbc', 'sbc'] if args.generators == 'both' else [args.generators]
-    # --gbc-dipole is ORTHOGONAL to --generators (which picks the cell type,
-    # gbc|sbc|both). 'lumped' swaps in the legacy single-dipole registry entry
-    # so the old behaviour is the same code, not a copy.
-    if args.gbc_dipole == 'lumped':
-        pops = ['gbc_lumped' if p == 'gbc' else p for p in pops]
+    pops  = ['gbc', 'sbc']
     stem  = _pic_stem(paths.resolve_pic(args.pic_file))
 
     # Extract presynaptic spikes once per side; both populations share the ANF drive.
@@ -605,9 +455,9 @@ def main():
     for pop_name in pops:
         cfg = POPULATIONS[pop_name]
         for side in sides:
-            if cfg.get('runs'):
-                # split GBC: three grouped dipoles, each at its MEASURED centroid
-                dipoles, centroids, output_dir = _run_split(
+            if cfg.get('run'):
+                # GBC: two grouped dipoles, each at its MEASURED centroid
+                dipoles, centroids, output_dir, _ = _run_grouped(
                     pop_name, side, args, meta_by_side[side])
                 if RANK == 0:
                     p_heads, r_heads = _project_and_save(
@@ -637,7 +487,7 @@ def main():
                                        _n_cells(args, cfg), SRATE)
 
     if RANK == 0:
-        tag = 'avcn' if len(pops) > 1 else pops[0]
+        tag = 'avcn'
         final_dir = paths.make_output_dirs(
             paths.output_dir_for('abr', stem, _cond_label(args), args.side,
                                  prefix=tag),
@@ -648,8 +498,7 @@ def main():
         n_label = ('/'.join(f'{p.upper()} {POPULATIONS[p]["n_post_total"]}'
                             for p in pops) if args.full_n else str(args.n_cells))
         _plot_abr(final_dir, V_out, electrode_names, srate,
-                  _cond_label(args), args.side, n_label,
-                  derivation=args.derivation)
+                  _cond_label(args), args.side, n_label)
 
 
 if __name__ == '__main__':
