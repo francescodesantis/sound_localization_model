@@ -27,7 +27,6 @@ data/SOFA
 reconstruction/tests/__pycache__
 external/
 docs/
-# --- private / research material (kept on disk, out of the release) ---
 reconstruction/.private/
 reconstruction/abr_results/
 reconstruction/ABR_reconstruction/main_abr_bi.py
