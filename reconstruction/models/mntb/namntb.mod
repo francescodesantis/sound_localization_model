@@ -1,27 +1,32 @@
-: Fast sodium channel (NaV) for MNTB principal cells.
-: Based on Rothman & Manis 2003 (see models/mso/nax.mod) but with faster
-: inactivation recovery, matching the MNTB's ability to phase-lock and fire
-: high-frequency (200-400 Hz) trains to calyx-of-Held input (Srinivasan 2019;
-: Kaczmarek/Kim MNTB Na literature). Unique SUFFIX (namntb) so it coexists in one
-: NEURON process with the auto-loaded MSO/repo-root nax (no suffix collision).
+: Fast sodium channel (NaV) of the MNTB principal cell.
+: Rothman & Manis 2003 kinetics (as models/mso/nax.mod), unique SUFFIX namntb.
 :
-: Differences from nax:
-:   * htau scaled ~0.3x (faster recovery from inactivation)
-:   * hinf shifted +5 mV depolarised (more Na available near rest / during trains)
+: Gating rates scale with Q10 = 2.2 from 22 degC (tadj ~ 3.26 at 37 degC):
+: NaV gating is less temperature-sensitive than K (Q10 2.2-2.5 vs 2.8-3.0).
+: Conductance is not scaled (published gmax are functional 37 degC values).
+:
+: Difference from nax: hinf shifted +5 mV (NaV1.6-rich MNTB soma inactivates
+: at a more depolarised V_1/2, keeping hinf > 0.7-0.8 at rest so the cell
+: follows 200-400 Hz; Leao et al. 2005).
 
 NEURON {
     SUFFIX namntb
     USEION na READ ena WRITE ina
     RANGE gbar
+    GLOBAL q10, tau_scale
 }
 
 PARAMETER {
+    q10 = 2.2
+    tau_scale = 1.0
     gbar = 0.35 (S/cm2)
 }
 
 STATE { m h }
 
 ASSIGNED {
+    celsius (degC)
+    tadj
     v   (mV)
     ena (mV)
     ina (mA/cm2)
@@ -33,13 +38,14 @@ BREAKPOINT {
 }
 
 INITIAL {
+    tadj = q10^((celsius - 22) / 10)
     m = minf(v)
     h = hinf(v)
 }
 
 DERIVATIVE states {
-    m' = (minf(v) - m) / mtau(v)
-    h' = (hinf(v) - h) / htau(v)
+    m' = (minf(v) - m) * tadj / mtau(v)
+    h' = (hinf(v) - h) * tadj / htau(v)
 }
 
 FUNCTION minf(v(mV)) {
@@ -47,7 +53,7 @@ FUNCTION minf(v(mV)) {
 }
 
 FUNCTION mtau(v(mV)) (ms) {
-    mtau = 10 / (5*exp((v+60)/18) + 36*exp(-(v+60)/25)) + 0.04
+    mtau = tau_scale * (10 / (5*exp((v+60)/18) + 36*exp(-(v+60)/25)) + 0.04)
 }
 
 FUNCTION hinf(v(mV)) {
@@ -55,5 +61,5 @@ FUNCTION hinf(v(mV)) {
 }
 
 FUNCTION htau(v(mV)) (ms) {
-    htau = 0.3 * (100 / (7*exp((v+60)/11) + 10*exp(-(v+60)/25))) + 0.3
+    htau = tau_scale * (100 / (7*exp((v+60)/11) + 10*exp(-(v+60)/25)) + 0.6)
 }

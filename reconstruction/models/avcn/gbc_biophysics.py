@@ -45,24 +45,13 @@ REF_NS_II_I = {
     'ihvcn':      30.0,
     'leak':        2.0,
 }
-# Run A of the split GBC generator: the postsynaptic dipole must contain NO
-# action potential, so sodium is OMITTED (not zeroed post hoc) -- decorate_gbc
-# skips `insert` when gbar <= 0, so the channel is simply absent: no window
-# current, no ena, nothing. Every other channel STAYS: khtbc/kltbc/ihvcn/leak
-# are subthreshold-active and KLT in particular is what makes the GBC's EPSP
-# phasic, so removing it would distort the synaptic dipole far more than Na does.
-# Verified quiescent: residual |p| 1.0 nA.um vs a 179,000 nA.um wave-II peak,
-# v_soma -65.2..-65.0 mV, so v_init = -65 remains equilibrium without Na.
-REF_NS_II_NONA = dict(REF_NS_II, nacncoop=0.0)
-
-# Compartment-class groups for the split GBC dipole (see recon_core.tree_dipole).
-# An edge is assigned to its CHILD segment's class.
+# Compartment-class groups for the grouped GBC dipole (see recon_core.physics.tree_dipole):
+# GBCsoma = GBC_SPIKE_CLASSES, GBCaxon = GBC_TRUNK_CLASSES. An edge is assigned
+# to its CHILD segment's class.
 GBC_SYN_CLASSES = ('soma', 'primarydendrite', 'secondarydendrite')
 GBC_TRUNK_CLASSES = ('node', 'internode')
-#: Everything that is not the trunk. Named for what it CONTAINS, not where it
-#: sits: measured frac_bp = 0.78, i.e. ~78% of this group is somatodendritic
-#: return current (the spike-driven outflow completing the AIS sink's circuit),
-#: not AIS current. Calling it "ais" would mislead every figure legend.
+#: Everything that is not the axon trunk: soma, dendrites, hillock, AIS and the
+#: myelinated stub (mostly somatodendritic return current of the AIS sink).
 GBC_SPIKE_CLASSES = GBC_SYN_CLASSES + ('hillock', 'initialsegment',
                                        'myelinatedaxon', 'unmyelinatedaxon')
 
@@ -75,12 +64,16 @@ REF_NS = REF_NS_II
 #
 # 'node' and 'internode' are for the synthetic extended active axon (the GBC
 # travelling wave, models/avcn/axon_builder.py), not from the cnmodel table:
-#   node       active node of Ranvier: very high Na to regenerate the AP plus
-#              fast Kv3 (khtbc) repolarisation, giving saltatory conduction.
+#   node       active node of Ranvier: high Na plus fast Kv3 (khtbc), for
+#              saltatory conduction.
 #   internode  myelinated and passive: no active channels, a tiny leak (high
 #              Rm) and the reduced capacitance CM_MYELIN (see below).
 SCALE = {
     #             soma  hillock  initialsegment  unmyel  myel   primdend secdend  node internode
+    # nacncoop: AIS 5x soma. With 100x the late asynchronous EPSPs of a loud
+    # click re-trigger spikes for tens of ms and give a post-wave-III tail a
+    # clinical ABR does not show; 5x keeps the GBC phasic against its KLT sink.
+    # No measurement of the bushy-cell AIS:soma Na ratio exists.
     'nacncoop': {'soma': 1.0, 'hillock': 5.0, 'initialsegment': 5.0, 'unmyelinatedaxon': 3.0,
                  'myelinatedaxon': 0.0, 'primarydendrite': 0.50, 'secondarydendrite': 0.25,
                  'node': 10.0, 'internode': 0.0},
@@ -103,9 +96,30 @@ E_NA   = 50.0     # mV
 E_K    = -84.0    # mV
 E_H    = -43.0    # mV  (ihvcn.eh)
 E_LEAK = -65.0    # mV  (leak.erev)
-RA     = 150.0    # ohm*cm
+RA     = 150.0    # ohm*cm   somatodendritic (cnmodel bushy cell)
 CM     = 0.9      # uF/cm^2  (cnmodel membrane cap for mouse bushy)
-CM_MYELIN = 0.02  # uF/cm^2  (myelinated internode: ~1/45 of unmyelinated membrane)
+
+# --- axial resistivity of the myelinated axon --------------------------------
+# 70 ohm*cm (large myelinated axons), on the node/internode classes only; applied
+# to the soma and dendrites it raises the load at the initiation site and the AP
+# does not enter the axon.
+RA_AXON = 70.0    # ohm*cm
+
+# --- myelin capacitance, from the lamella count ------------------------------
+# Myelin thickness (D - gD)/2 at the CNS compact-myelin period of 15.6 nm gives
+# n lamellae, two membranes each, in series:
+#     D = 8 µm, g = 0.65 -> 89.7 lamellae -> CM_MYELIN = 0.9 / 179.5 = 0.00501 µF/cm²
+MYELIN_LAMELLA_PERIOD_UM = 0.0156
+
+
+def myelin_cm(outer_diam_um, g_ratio, cm=CM, period_um=MYELIN_LAMELLA_PERIOD_UM):
+    """Internode capacitance uF/cm^2 from the fibre's own myelin thickness."""
+    n_lamellae = (outer_diam_um * (1.0 - g_ratio) / 2.0) / period_um
+    return cm / (2.0 * n_lamellae)
+
+
+import axon_builder as _ab                                     # noqa: E402
+CM_MYELIN = myelin_cm(_ab.FIBER_OUTER_DIAM, _ab.G_RATIO)
 
 # Map every known hoc SectionList name to a cnmodel compartment class.
 # Covers both the cnmodel stick (names equal classes) and the Dryad EM
@@ -294,7 +308,7 @@ def decorate_gbc(cell=None, set_nseg=True, verbose=False, ref_ns=None):
     for sec in h.allsec():
         comp = compartment_of.get(sec.name(), 'soma')
 
-        sec.Ra = RA
+        sec.Ra = RA_AXON if comp in GBC_TRUNK_CLASSES else RA
         sec.cm = CM_MYELIN if comp == 'internode' else CM
         if set_nseg:
             sec.nseg = int((sec.L / (0.1 * h.lambda_f(100, sec=sec)) + 0.9) / 2) * 2 + 1
@@ -331,7 +345,7 @@ def decorate_gbc(cell=None, set_nseg=True, verbose=False, ref_ns=None):
 def segment_compartment_classes(cell):
     """(n_seg,) compartment-class label per LFPy segment.
 
-    The vectorised sibling of seg_idx_for_classes, for recon_core.tree_dipole.
+    The vectorised sibling of seg_idx_for_classes, for recon_core.physics.tree_dipole.
     Segment order is `cell.allseclist`, matching cell.imem / cell.x / y / z.
     """
     import numpy as np

@@ -2,19 +2,28 @@
 : Rothman & Manis 2003, J Neurophysiol 89:3070-3087
 : Validated for auditory brainstem neurons (MSO, AVCN)
 
+: Temperature: gating RATES scale with Q10 = 3.0 from the 22 degC the kinetics
+: were fitted at (Rothman & Manis 2003), tadj = 3^((celsius-22)/10) ~ 5.2 at
+: 37 degC. The conductance is NOT scaled: published gmax are the functional
+: 37 degC values (Wang & Colburn 2012, Brughera et al. 2018).
+
 NEURON {
     SUFFIX klt
     USEION k READ ek WRITE ik
     RANGE gbar
+    GLOBAL q10
 }
 
 PARAMETER {
+    q10 = 3.0
     gbar = 0.02 (S/cm2)
 }
 
 STATE { w h }
 
 ASSIGNED {
+    celsius (degC)
+    tadj
     v   (mV)
     ek  (mV)
     ik  (mA/cm2)
@@ -26,13 +35,14 @@ BREAKPOINT {
 }
 
 INITIAL {
+    tadj = q10^((celsius - 22) / 10)
     w = winf(v)
     h = hinf(v)
 }
 
 DERIVATIVE states {
-    w' = (winf(v) - w) / wtau(v)
-    h' = (hinf(v) - h) / htau(v)
+    w' = (winf(v) - w) * tadj / wtau(v)
+    h' = (hinf(v) - h) * tadj / htau(v)
 }
 
 FUNCTION winf(v(mV)) {

@@ -1,30 +1,17 @@
 #!/usr/bin/env python3
-"""
-HybridLFPy LFP reconstruction for the MNTB (medial nucleus of the trapezoid body).
+"""Near-field LFP of the MNTB principal-cell population.
 
-The MNTB principal cell is driven by a single giant calyx of Held from the
-contralateral globular bushy cell. This script reconstructs the postsynaptic
-field (the calyx EPSC somatic sink and its passive spread). The presynaptic
-calyx current, the prespike, is a separate co-located generator added by
---with-calyx (see calyx_model.hoc).
+Each principal cell is driven by one calyx of Held from the contralateral GBC
+(GBC_{contra} -> MNTB_{side}). This is the postsynaptic field; --with-calyx
+adds the co-located presynaptic calyx (prespike) population
+(main_reconstruct_calyx.py). The GBC axon crossing the midline belongs to
+the AVCN generator.
 
-  MNTB drive (per BrainstemModel.py):
-    GBC_{contra} to MNTB_{side}   excitatory calyx, 1 per cell, decussating
+  mpiexec -n 4 python LFP_reconstruction/main_reconstruct_mntb.py --pic-file RESULTS/<f>.pic \
+      --angle 0 --side L --n-cells 3600 [--with-calyx]
 
-The GBC axon crossing the midline, the dominant wave-III generator, is
-modelled in the AVCN GBC pipeline (VCN_c09_extended_axon.hoc) and not here, so
-nothing is counted twice. This stage is the MNTB's own somatodendritic and
-calyx-terminal field.
-
-CLI:
-  python LFP_reconstruction/main_reconstruct_mntb.py --pic-file RESULTS/<f>.pic \
-      --angle 0 --side L --n-cells 100 [--with-calyx]
-  mpiexec -n 4 python LFP_reconstruction/main_reconstruct_mntb.py ... --n-cells 3600
-
-Outputs go to RESULTS/lfp_tmp/output_mntb_{stem}_angle{A}_{S}/figures/:
-  mntb_lfp_reconstruction.png, mntb_lfp_single_cells.png,
-  mntb_lfp_phase_cycle.png, plus output_mntb_calyx_* and a combined figure
-  when --with-calyx
+Outputs: RESULTS/lfp_tmp/output_mntb_<stem>_<stimulus>_<side>/ (and
+output_mntb_calyx_* plus a combined figure with --with-calyx).
 """
 
 import os
@@ -37,10 +24,11 @@ import numpy as np
 import lfpykit.models as lfpykit_models
 import hybridLFPy
 
-from recon_core import io_utils, params as P, paths
-from recon_core.population import ReconstructionPopulation
+from recon_core.utils import io_utils, paths
+from recon_core.config import params as P
+from recon_core.physics.population import ReconstructionPopulation
 from LFP_reconstruction import figures
-from recon_core.mpi_utils import (COMM, RANK, broadcast_from_root,
+from recon_core.utils.mpi_utils import (COMM, RANK, broadcast_from_root,
                                   load_mechanisms, set_temperature)
 
 MNTB_DIR = paths.MNTB_MODELS_DIR
@@ -63,7 +51,6 @@ PROBE_Y = np.zeros(N_CH)
 SIGMA = P.SIGMA_EXTRACELLULAR
 
 LAYER_BOUNDARIES = P.MNTB_LAYERS
-CALYX_SYN = P.MNTB_SYNAPSES
 
 
 # ---------------------------------------------------------------------------

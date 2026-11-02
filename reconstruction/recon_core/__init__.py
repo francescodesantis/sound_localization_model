@@ -8,8 +8,9 @@ processing live here. The two packages hold only what is specific to them.
 
 Import as a package from the repository root:
 
-    from recon_core import params, paths, signal_utils
+    from recon_core.config import params
+    from recon_core.utils import paths, signal_utils
 
 Entry-point scripts stay runnable directly; they put the repository root on
-sys.path first, see recon_core.bootstrap.
+sys.path first, see recon_core.utils.bootstrap.
 """

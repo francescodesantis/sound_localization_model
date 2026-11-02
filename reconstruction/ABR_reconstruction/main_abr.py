@@ -1,32 +1,14 @@
 #!/usr/bin/env python3
-"""
-MSO ABR reconstruction: current dipole moment through the 4-sphere head model.
+"""MSO ABR: population current dipole through the 4-sphere head model.
 
-CLI:
-  python ABR_reconstruction/main_abr.py [options]
-  mpiexec -n 4 python ABR_reconstruction/main_abr.py --angle 45 --side R --n-cells 200
+  mpiexec -n 4 python ABR_reconstruction/main_abr.py --pic-file RESULTS/<f>.pic \
+      --angle 0 --side both [--n-cells N] [--condition binaural|left_ear|right_ear]
 
-Options:
-  --pic-file FILE          Path to .pic simulation result
-  --angle DEGREES          Sound azimuth angle (default: 0)
-  --side L|R|both          Brain side (default: L)
-  --n-cells N              MSO cells to simulate (default: 100)
-  --derivation Cz-M1|Cz-M2|Cz-avg  Differential to plot (default: Cz-M1)
-  --condition binaural|left_ear|right_ear  Acoustic condition (default: binaural)
-
-Outputs go to RESULTS/abr_tmp/output_<stem>_angle<A>_<side>/:
-  ABR.h5                   scalp potentials (n_electrodes, n_t), mV
-  population_dipole.h5     population dipole moment (3, n_t), nA.µm
-  figures/mso_abr.png      ABR waveforms and differentials
-  figures/mso_abr_phase_cycle.png  phase-averaged ABR
-
-Units are lfpykit native, with no conversion needed:
-  Positions / electrode coords : µm
-  Dipole moment (CurrentDipoleMoment output) : nA.µm
-  FourSphereVolumeConductor input p : nA.µm
-  FourSphereVolumeConductor input dipole_location : µm
-  FourSphereVolumeConductor output : mV
-  Saved / plotted ABR : µV (mV x 1000)
+Outputs in RESULTS/abr_tmp/output_<stem>_<stimulus>_<side>[_<condition>]/:
+  ABR.h5                scalp potentials (n_electrodes, T), µV
+  population_dipole.h5  population dipole moment (3, T), nA·µm
+  figures/              ABR waveforms
+plus one dipole record per side (RESULTS/abr_tmp/dipoles/).
 """
 
 import os
@@ -41,9 +23,11 @@ import matplotlib.pyplot as plt
 
 import hybridLFPy
 
-from recon_core import head_model, io_utils, params as P, paths
-from recon_core.mpi_utils import COMM, RANK, broadcast_from_root, reduce_sum
-from recon_core.signal_utils import bandpass
+from recon_core.physics import head_model
+from recon_core.utils import io_utils, paths
+from recon_core.config import params as P
+from recon_core.utils.mpi_utils import COMM, RANK, broadcast_from_root, reduce_sum
+from recon_core.utils.signal_utils import bandpass
 
 from LFP_reconstruction.main_reconstruct import (
     MSOPopulation, HOC_FILE, ELLIPSE_RADIUS_X, ELLIPSE_RADIUS_Y,
@@ -54,6 +38,7 @@ DT, TSTOP = P.DT, P.TSTOP
 V_INIT = P.MSO_V_INIT
 N_CELLS = P.N_MSO_TOTAL
 SRATE = P.SRATE
+POPULATIONSEED = 42
 
 # Re-exported for the figure scripts, which read the same head model.
 FOUR_SPHERE_RADII = P.FOUR_SPHERE_RADII
@@ -67,31 +52,11 @@ dipoles_dir_for = paths.dipoles_dir_for
 save_dipole_record = io_utils.save_dipole_record
 
 
-def _bandpass(signal, lo=150., hi=None, fs=None, order=4):
-    """Wrapper kept for older callers; new code calls signal_utils.bandpass."""
-    return bandpass(signal, fs=fs or SRATE, lo=lo, hi=hi, order=order)
-
-
 def superpose_sources(sources, electrode_names, hi=3000., lo=150.):
     """Kept for the figure scripts: sources are (label, side, p_head, r)."""
     return (head_model.superpose_sources(
         [(label, p_head, r) for label, _side, p_head, r in sources],
         electrode_names, SRATE, lo=lo, hi=hi), SRATE)
-
-
-def _inh_tag(args):
-    """Directory suffix for an inhibition-blocked run ('' when inhibition intact)."""
-    return '_noinh' if getattr(args, 'block_inhibition', False) else ''
-
-
-def _block_inhibition():
-    """Zero the MSO inhibitory synaptic weights (MNTBC contra, LNTBC ipsi).
-
-    The conductances that reach the cell live in MSOPopulation.PER_POP_SYN,
-    which insert_all_synapses() reads. The J_yX argument does not drive them.
-    """
-    for pop in ('MNTBC', 'LNTBC'):
-        MSOPopulation.PER_POP_SYN[pop]['weight'] = 0.0
 
 
 def _side_condition(condition, side):
@@ -113,10 +78,8 @@ def _side_condition(condition, side):
 # Per-side simulation
 # ---------------------------------------------------------------------------
 def _run_one_side(side, args, meta):
-    """
-    Simulate the MSO population for one brain side.
-    Returns the population dipole (3, T) nA.µm, meaningful on rank 0 only,
-    and the output directory path.
+    """Simulate the MSO population of one side -> (dipole (3, T) nA·µm on rank 0,
+    output directory).
     """
     from lfpykit import CurrentDipoleMoment
 
@@ -125,19 +88,16 @@ def _run_one_side(side, args, meta):
                f'MNTBC_{side}', f'LNTBC_{side}']
     k_yxl_local = [row[:] for row in P.MSO_CONVERGENCE]
     side_cond = _side_condition(args.condition, side)
-    # Silence the inputs the absent ear would have driven by zeroing that
-    # population's column, so the surviving counts stay tied to MSO_CONVERGENCE.
-    #   ipsilateral   ear: contra SBC (col 0) and MNTBC (col 2, contra-driven) off
-    #   contralateral ear: ipsi SBC   (col 1) and LNTBC (col 3, ipsi-driven)   off
+    # Monaural: zero the columns of the inputs driven by the silent ear.
     _SILENCED = {'ipsilateral': (0, 2), 'contralateral': (1, 3)}
     for col in _SILENCED.get(side_cond, ()):
         for row in k_yxl_local:
             row[col] = 0
     # J_yX does not set the synapse conductance: MSOPopulation.insert_all_synapses
-    # overrides it with PER_POP_SYN[pop]['weight']. See _block_inhibition().
+    # overrides it with PER_POP_SYN[pop]['weight'].
     j_yx_local    = P.MSO_J_YX
     tau_yx_local  = P.MSO_TAU_YX
-    syn_delay_loc = P.MSO_DELAYS
+    syn_delay_loc = list(P.MSO_DELAYS)
 
     pic_file   = paths.resolve_pic(args.pic_file)
     stem       = _pic_stem(pic_file)
@@ -148,7 +108,7 @@ def _run_one_side(side, args, meta):
     cond_tag   = f'_{args.condition}' if args.condition != 'binaural' else ''
     output_dir = paths.make_output_dirs(
         paths.output_dir_for('abr', stem, cond_label, side,
-                             suffix=f'{cond_tag}{_inh_tag(args)}'),
+                             suffix=cond_tag),
         subdirs=('figures',))
 
     k_arr         = np.array(k_yxl_local)
@@ -190,7 +150,7 @@ def _run_one_side(side, args, meta):
         savelist=['somapos'],
         savefolder=output_dir,
         dt_output=DT,
-        POPULATIONSEED=42,
+        POPULATIONSEED=POPULATIONSEED,
         X=X_pops,
         networkSim=networkSim,
         k_yXL=k_yxl_local,
@@ -235,7 +195,7 @@ def _project_and_save(side, p_model, output_dir):
 
 def _apply_head_model(p_head_by_side, output_dir, electrode_names):
     """Project each side's dipole from its own position and sum at the scalp."""
-    lo, hi = P.BAND_TOLNAI
+    lo, hi = P.BAND_DEFAULT
     V_uV, srate = head_model.project_by_side(
         p_head_by_side, MSO_POS_UM, electrode_names, SRATE, lo=lo, hi=hi)
     io_utils.write_abr(output_dir, V_uV, electrode_names, srate)
@@ -346,21 +306,9 @@ def main():
     parser.add_argument('--side',       type=str, default='L',
                         choices=['L', 'R', 'both'])
     parser.add_argument('--n-cells',    type=int, default=N_CELLS, dest='n_cells')
-    parser.add_argument('--derivation', type=str, default='Cz-M1',
-                        choices=['Cz-M1', 'Cz-M2', 'Cz-avg'],
-                        help='Differential derivation to plot (Cz-avg = Cz − mean(M1,M2))')
     parser.add_argument('--condition', type=str, default='binaural',
                         choices=['binaural', 'left_ear', 'right_ear'])
-    parser.add_argument('--block-inhibition', action='store_true',
-                        dest='block_inhibition',
-                        help='Block MSO inhibition: zero the MNTBC and LNTBC synaptic '
-                             'weights. Output goes to a separate *_noinh directory.')
     args = parser.parse_args()
-
-    if args.block_inhibition:
-        _block_inhibition()
-        if RANK == 0:
-            print('[block-inhibition] MSO inhibitory weights (MNTBC, LNTBC) set to 0.0')
 
     sides = ['L', 'R'] if args.side == 'both' else [args.side]
 
@@ -379,16 +327,11 @@ def main():
             p_head, _ = _project_and_save(side, global_dipole, output_dir)
             p_head_by_side[side] = p_head
             _stem = _pic_stem(paths.resolve_pic(args.pic_file))
-            # The variant tag has to reach the record name: records are keyed
-            # <nucleus>__<generator>__<side>__<condition>, so an
-            # inhibition-blocked run would otherwise overwrite the intact
-            # binaural record main_abr_full.py superposes. Tagging it also keeps
-            # the variant out of the composite, which selects on condition.
             save_dipole_record(_stem, _condition(args)[1], 'MSO',
                                'postsynaptic', side,
                                p_head, MSO_POS_UM[side], N_CELLS, args.n_cells,
                                SRATE,
-                               condition=f'{args.condition}{_inh_tag(args)}')
+                               condition=args.condition)
 
     if RANK == 0:
         # For bilateral, create a joint output directory
@@ -398,7 +341,7 @@ def main():
             cond_tag = f'_{args.condition}' if args.condition != 'binaural' else ''
             final_dir = paths.make_output_dirs(
                 paths.output_dir_for('abr', stem, cond_label, 'both',
-                                     suffix=f'{cond_tag}{_inh_tag(args)}'),
+                                     suffix=cond_tag),
                 subdirs=('figures',))
         else:
             final_dir = output_dirs[sides[0]]
@@ -407,7 +350,7 @@ def main():
         V_uV, srate = _apply_head_model(p_head_by_side, final_dir, electrode_names)
 
         _plot_abr(final_dir, V_uV, electrode_names, srate,
-                  _condition(args)[1], args.side, args.n_cells, derivation=args.derivation)
+                  _condition(args)[1], args.side, args.n_cells)
 
 
 if __name__ == '__main__':

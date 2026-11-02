@@ -1,21 +1,12 @@
 #!/usr/bin/env python3
-"""
-Co-located calyx-of-Held prespike population, summed with the MNTB principal
-cell LFP by linear superposition. Invoked by main_reconstruct_mntb.py
---with-calyx; not usually run standalone.
+"""Calyx-of-Held prespike population, co-located with the MNTB principal cells
+and summed with their LFP (main_reconstruct_mntb.py --with-calyx).
 
-Each calyx is the presynaptic terminal of a contralateral GBC axon. It is
-driven by the GBC_{contra} spike train through a suprathreshold somatic-axon
-synapse so it fires one presynaptic AP per input, and its transmembrane
-current is the extracellular prespike. Probe and nucleus geometry match the
-principal cells, so the two LFPs add exactly (output_mntb_calyx_* is summed in
-main_reconstruct_mntb._plot_combined).
-
-The cleft leak conductance g_cl ~ 1 uS is characterised single-cell in
-models/mntb/validate_calyx.py (V_cleft of several mV). The population prespike
-here is the calyx transmembrane current, the dominant term. Cross-cell
-ephaptic feedback onto the apposed MNTB soma is not modelled, since LFPy cells
-are independent.
+Each calyx, driven by the GBC_{contra} spike train through a suprathreshold
+synapse, fires one presynaptic AP per input; its transmembrane current is the
+extracellular prespike. Probe and nucleus geometry match the principal
+cells, so the two LFPs add exactly. Ephaptic feedback onto the apposed MNTB
+soma is not modelled.
 """
 import os
 import sys
@@ -24,7 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from recon_core import params as P, paths
+from recon_core.config import params as P
+from recon_core.utils import paths
 from LFP_reconstruction.main_reconstruct_mntb import MNTBPopulation, _run_population
 
 CALYX_HOC = os.path.join(paths.MNTB_MODELS_DIR, 'calyx_model.hoc')
@@ -36,15 +28,22 @@ class CalyxPopulation(MNTBPopulation):
     PER_POP_SYN = P.CALYX_SYNAPSES
 
     def select_synapse_idx(self, cell, pop_type, idx, layer):
-        """Drive the pre-calyx axon, not the terminal.
+        """Drive the PROXIMAL end of the neck -- the heminode boundary.
 
         The prespike is the presynaptic action potential invading the terminal,
-        so the drive has to arrive upstream of it and propagate in.
+        so the drive has to arrive upstream of the arbor and propagate in. The
+        heminode itself belongs to the GBC trunk (models/avcn/axon_builder.py)
+        and is deliberately absent from this cell, so neck(0) IS the boundary:
+        everything distal to it is this generator's, everything proximal is the
+        AVCN's, and no membrane is counted twice.
+
+        Not a random draw over the neck any more: every calyx is invaded at the
+        same place, as every trunk delivers its action potential to the same
+        place.
         """
-        pre_segs = cell.get_idx('precalyx_axon')
-        if pop_type == 'GBC' and len(pre_segs) > 0:
-            return np.random.choice(pre_segs, size=len(idx),
-                                    replace=True).astype('int32')
+        neck_segs = cell.get_idx('neck')
+        if pop_type == 'GBC' and len(neck_segs) > 0:
+            return np.full(len(idx), int(neck_segs[0]), dtype='int32')
         return idx
 
 
@@ -53,9 +52,8 @@ def run_calyx(args, meta, spikes_dir, stem, contra_side):
     k_yxl_local = P.MNTB_CONVERGENCE   # single synapse, re-placed by the override
     j_yx_local  = P.CALYX_J_YX
     tau_yx_local = P.CALYX_TAU_YX
-    # The calyx AP happens at the GBC spike, while the postsynaptic MNTB EPSC
-    # carries the full GBCs2MNTBCs = 0.5 ms synaptic delay, so the prespike
-    # leads the postsynaptic sink by ~0.5 ms as it does in vivo.
+    # The calyx fires when the AP reaches the heminode (CALYX_DELAYS = axonal
+    # conduction); the postsynaptic EPSC follows GBC_MNTB_SYNAPTIC_MS later.
     syn_delay_loc   = P.CALYX_DELAYS
     syn_delay_scale = [None]
 

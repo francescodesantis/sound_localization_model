@@ -1,22 +1,13 @@
 #!/usr/bin/env python3
-"""
-HybridLFPy LFP reconstruction for the MSO population.
+"""Near-field LFP of the MSO population (hybridLFPy).
 
-CLI usage (single or multi-process):
-  python LFP_reconstruction/main_reconstruct.py [options]
-  mpiexec -n 4 python LFP_reconstruction/main_reconstruct.py --angle 45 --side R --n-cells 200
+  mpiexec -n 4 python LFP_reconstruction/main_reconstruct.py --pic-file RESULTS/<f>.pic \
+      --angle 0 --side L [--n-cells N] [--n-single 5]
+      [--condition binaural|ipsilateral|contralateral] [--itd-us US | --ild-db DB]
+      [--mso-freq-min HZ --mso-freq-max HZ]
 
-Options:
-  --pic-file FILE   Path to .pic simulation result (default: RESULTS/baseline_simulation.pic)
-  --angle DEGREES   Sound azimuth angle (default: 0)
-  --side  L|R       Brain side (default: L)
-  --n-cells N       MSO cells to simulate (default: 100)
-  --n-single N      Single-cell contribution plots to save (default: 5)
-
-Outputs go to RESULTS/lfp_tmp/output_angle{ANGLE}_{SIDE}/figures/:
-  mso_lfp_reconstruction.png   compound LFP (stacked traces and colourmap)
-  mso_lfp_single_cells.png     per-cell LFP colourmap and best-channel trace,
-                               annotated with the min soma to probe distance
+Outputs: RESULTS/lfp_tmp/output_<stem>_<stimulus>_<side>/ (PointSourcePotential_sum.h5,
+figures/mso_lfp_reconstruction.png, figures/mso_lfp_single_cells.png).
 """
 
 import os
@@ -28,11 +19,11 @@ import numpy as np
 import lfpykit.models as lfpykit_models
 import hybridLFPy
 
-from recon_core import params as P
-from recon_core import paths
-from recon_core.population import ReconstructionPopulation
+from recon_core.config import params as P
+from recon_core.utils import paths
+from recon_core.physics.population import ReconstructionPopulation
 from LFP_reconstruction import figures
-from recon_core.mpi_utils import (COMM, RANK, broadcast_from_root,
+from recon_core.utils.mpi_utils import (COMM, RANK, broadcast_from_root,
                                   load_mechanisms, set_temperature)
 
 load_mechanisms(paths.MSO_MODELS_DIR)
@@ -180,16 +171,11 @@ def main():
     parser.add_argument('--ild-db', type=float, default=None, dest='ild_db',
                         help='Select an artificial-ILD condition (dB). Overrides '
                              '--itd-us/--angle; pic key looked up in dB.')
-    parser.add_argument('--hoc-file', type=str, default=None, dest='hoc_file',
-                        help='HOC morphology file (default: models/mso/mso_model.hoc)')
     parser.add_argument('--mso-freq-min', type=float, default=MSO_FREQ_MIN, dest='mso_freq_min',
                         help=f'Lower CF bound for MSO input band in Hz (default: {MSO_FREQ_MIN})')
     parser.add_argument('--mso-freq-max', type=float, default=MSO_FREQ_MAX, dest='mso_freq_max',
                         help=f'Upper CF bound for MSO input band in Hz (default: {MSO_FREQ_MAX})')
     args = parser.parse_args()
-
-    if args.hoc_file is None:
-        args.hoc_file = HOC_FILE
 
     mso_idx_lo = mso_freq_to_idx(args.mso_freq_min)
     mso_idx_hi = mso_freq_to_idx(args.mso_freq_max)
@@ -216,10 +202,7 @@ def main():
     X_pops = [f'SBC_{contra_side}', f'SBC_{side}',
               f'MNTBC_{side}', f'LNTBC_{side}']
     k_yxl_local = [row[:] for row in P.MSO_CONVERGENCE]
-    # Silence the inputs the absent ear would have driven by zeroing that
-    # population's column, so the surviving counts stay tied to MSO_CONVERGENCE.
-    #   ipsilateral   ear: contra SBC (col 0) and MNTBC (col 2, contra-driven) off
-    #   contralateral ear: ipsi SBC   (col 1) and LNTBC (col 3, ipsi-driven)   off
+    # Monaural: zero the columns of the inputs driven by the silent ear.
     _SILENCED = {'ipsilateral': (0, 2), 'contralateral': (1, 3)}
     for col in _SILENCED.get(args.condition, ()):
         for row in k_yxl_local:
@@ -233,12 +216,11 @@ def main():
     stem       = _pic_stem(pic_file)
     spikes_dir = paths.spikes_dir_for(stem, cond_val, side)
     cond_tag   = '' if args.condition == 'binaural' else f'_cond_{args.condition}'
-    hoc_tag    = '_active' if args.hoc_file != HOC_FILE else ''
     freq_tag   = (f'_f{int(args.mso_freq_min)}-{int(args.mso_freq_max)}Hz'
                   if (args.mso_freq_min != MSO_FREQ_MIN or args.mso_freq_max != MSO_FREQ_MAX)
                   else '')
     output_dir = paths.make_output_dirs(paths.output_dir_for(
-        'lfp', stem, cond_label, side, suffix=f'{cond_tag}{hoc_tag}{freq_tag}'))
+        'lfp', stem, cond_label, side, suffix=f'{cond_tag}{freq_tag}'))
 
     # Synapses per presynaptic pop per MSO cell (column sums of k_yxl_local)
     k_arr         = np.array(k_yxl_local)
@@ -261,7 +243,7 @@ def main():
         mso_idx_hi=mso_idx_hi,
         y=pop_label,
         cellParams={
-            'morphology': args.hoc_file, 'passive': False, 'v_init': V_INIT,
+            'morphology': HOC_FILE, 'passive': False, 'v_init': V_INIT,
             'dt': DT, 'tstart': 0., 'tstop': TSTOP, 'nsegs_method': None,
         },
         rand_rot_axis=['z'],
@@ -348,12 +330,11 @@ def _extract_spikes(angle, side, pic_file=None):
     if os.path.exists(meta_path):
         with open(meta_path) as f:
             meta = json.load(f)
-        # Accept the cache only if it matches the current extract format: contra
-        # SBC + GBC, ipsi ANF and ipsi LSO output. Contra GBC is the MNTB calyx
-        # drive and LSO_{side} the spiking-LSO ABR drive, so requiring them
-        # forces re-extraction of stale caches.
+        # Accept the cache only if it holds every label the current extraction
+        # writes (contra SBC + GBC, ipsi ANF, LSO and GBC); otherwise re-extract.
         if (f'SBC_{contra_side}' in meta and f'GBC_{contra_side}' in meta
-                and f'ANF_{side}' in meta and f'LSO_{side}' in meta):
+                and f'ANF_{side}' in meta and f'LSO_{side}' in meta
+                and f'GBC_{side}' in meta):
             return meta
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import extract_spikes as _es

@@ -22,8 +22,8 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 import scipy.signal
 
-from recon_core import io_utils
-from recon_core.signal_utils import time_axis
+from recon_core.utils import io_utils
+from recon_core.utils.signal_utils import time_axis
 
 
 @dataclass(frozen=True)

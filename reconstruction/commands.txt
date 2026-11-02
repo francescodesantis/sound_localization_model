@@ -1,0 +1,105 @@
+================================================================================
+ RECONSTRUCTION COMMANDS: complete ABR and near-field LFP
+================================================================================
+Run everything from the repository root (the folder holding reconstruction/
+and simulate/), with the environment active:
+
+    mamba activate sl_env
+    cd <repository root>
+
+
+================================================================================
+ 1. SETUP (once)
+================================================================================
+  git submodule update --init --recursive
+  cd external/cochlea-1 && export CFLAGS="-std=c99" && python setup.py build_ext --inplace && cd ../..
+  mamba create -n sl_env -c conda-forge python=3.9.23 nest-simulator=3.8.0 -f environment.yml
+  mamba activate sl_env
+
+  # compile the NEURON mechanisms of every cell model
+  for d in anf avcn mntb mso; do (cd reconstruction/models/$d && nrnivmodl); done
+
+
+================================================================================
+ 2. COMPLETE ABR, NEST-DRIVEN PIPELINE
+================================================================================
+Every nucleus (ANF, AVCN GBC+SBC, MNTB, MSO, LSO) is driven by the NEST spike
+trains stored in the .pic and simulated in NEURON at its full cell count. The
+dipoles are summed at the scalp through a 4-sphere head model.
+
+  python reconstruction/main.py nest --pic-file <PIC> --itd-us 0 \
+      --condition left_ear --side both --ranks 8
+
+Options (identical for `nest` and `chain`):
+  --pic-file FILE                  NEST simulation result (required)
+  --out-dir DIR                    output directory (default
+                                   reconstruction/abr_results/<stem>_<stimulus>_<condition>[_<side>][_anf<mode>]_<pipeline>)
+  --condition binaural|left_ear|right_ear
+                                   ear(s) that receive the sound (default binaural)
+  --side L|R|both                  hemisphere(s) included in the composite and
+                                   figures (default both)
+  --angle DEG | --itd-us US | --ild-db DB
+                                   which stimulus of the .pic to use:
+                                     --angle   HRTF azimuth        (HRTF .pic)
+                                     --itd-us  artificial ITD      (diotic .pic: --itd-us 0)
+                                     --ild-db  artificial ILD
+                                   default --angle 0
+  --ranks N                        MPI ranks per NEURON job (default 4)
+  --anf-source full|boundary       auditory-nerve representation (default boundary)
+  --wave1-source aperture|modiolus wave I source with --anf-source boundary
+                                   (default modiolus) -> STILL A WORK IN PROGRESS
+  --no-force                       keep nuclei whose full-N records already exist
+  --dry-run                        print the commands without running them
+
+Examples:
+  # diotic click, both ears
+  python reconstruction/main.py nest --pic-file <PIC> --itd-us 0
+
+  # HRTF click at 0 deg, left ear only, left hemisphere only
+  python reconstruction/main.py nest --pic-file <PIC> --angle 0 --condition left_ear --side L
+
+  # redraw figures after a crash, re-simulating only what is missing
+  python reconstruction/main.py nest --pic-file <PIC> --itd-us 0 --no-force
+
+
+================================================================================
+ 3. COMPLETE ABR, NEURON CHAIN PIPELINE
+================================================================================
+Same options and outputs. The ANF input comes from the .pic; GBC and SBC are
+simulated first, the MNTB is driven by the NEURON GBC spikes, and MSO/LSO by
+the NEURON SBC and MNTB spikes.
+
+  python reconstruction/main.py chain --pic-file <PIC> --itd-us 0 \
+      --condition right_ear --side both --ranks 8
+
+
+================================================================================
+ 4. OUTPUT
+================================================================================
+  <out-dir>/
+    ABR_full.h5                              composite, per nucleus, per generator (µV)
+    figures/full_abr_contributions.png       composite + nuclei, ipsilateral derivation
+    figures/full_abr_contributions_Cz-M2.png (binaural only)
+    figures/full_abr_electrodes.png          composite + nuclei at Cz, M1, M2
+    cz_m1_m2/cz_m1_m2_{anf,gbc,sbc,mntb,mso,lso}.png
+                                             each nucleus at Cz, M1, M2
+
+  Per-nucleus dipole records: RESULTS/abr_tmp/dipoles/<stem>_<stimulus>[_chain]/
+
+
+================================================================================
+ 5. NEAR-FIELD LFP (one nucleus at a time)
+================================================================================
+  python reconstruction/main.py lfp mso  --pic-file <PIC> --angle 0 --side L --n-cells 15500
+  python reconstruction/main.py lfp gbc  --pic-file <PIC> --angle 0 --side L --n-cells 3600
+  python reconstruction/main.py lfp sbc  --pic-file <PIC> --angle 0 --side L --n-cells 3600
+  python reconstruction/main.py lfp lso  --pic-file <PIC> --angle 0 --side L --n-cells 5600
+  python reconstruction/main.py lfp mntb --pic-file <PIC> --angle 0 --side L --n-cells 3600 --with-calyx
+
+  # MPI
+  mpiexec -n 4 python reconstruction/main.py lfp mso --pic-file <PIC> --angle 0 --side L --n-cells 15500
+
+  # redraw a finished run's figures
+  python reconstruction/main.py lfp replot --output-dir RESULTS/lfp_tmp/output_<...>
+
+Each writes RESULTS/lfp_tmp/output_*/PointSourcePotential_sum.h5 + figures/.
