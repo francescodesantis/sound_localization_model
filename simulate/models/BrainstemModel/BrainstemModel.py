@@ -34,6 +34,7 @@ class BrainstemModel(SpikingModel):
     def create_network(self, P: Parameters, anfs_per_ear):
         self.pops = {"L": {}, "R": {}}
         self.recs = {"L": {}, "R": {}}
+        # self.multimeters = {"L": {}, "R": {}}
 
 
         for side in ["L", "R"]:
@@ -55,7 +56,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.SBC,
                     "g_L": P.G_LEAK.SBC,
-                    "E_L": P.E_L.SBC,                                
+                    "E_L": P.E_L.SBC,
+                    "V_m": P.E_L.SBC,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.SBC,
                     "V_th": P.V_TH.SBC,           
                     "t_ref": P.T_REF.SBC,         
@@ -75,7 +77,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.GBC,
                     "g_L": P.G_LEAK.GBC,
-                    "E_L": P.E_L.GBC,                                
+                    "E_L": P.E_L.GBC,
+                    "V_m": P.E_L.GBC,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.GBC,
                     "V_th": P.V_TH.GBC,           
                     "t_ref": P.T_REF.GBC,         
@@ -95,7 +98,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.LNTBC,
                     "g_L": P.G_LEAK.LNTBC,
-                    "E_L": P.E_L.LNTBC,                                
+                    "E_L": P.E_L.LNTBC,
+                    "V_m": P.E_L.LNTBC,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.LNTBC,
                     "V_th": P.V_TH.LNTBC,           
                     "t_ref": P.T_REF.LNTBC,         
@@ -115,7 +119,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.MNTBC,
                     "g_L": P.G_LEAK.MNTBC,
-                    "E_L": P.E_L.MNTBC,                                
+                    "E_L": P.E_L.MNTBC,
+                    "V_m": P.E_L.MNTBC,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.MNTBC,
                     "V_th": P.V_TH.MNTBC,           
                     "t_ref": P.T_REF.MNTBC,         
@@ -135,7 +140,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.MSO,
                     "g_L": P.G_LEAK.MSO,
-                    "E_L": P.E_L.MSO,                                
+                    "E_L": P.E_L.MSO,
+                    "V_m": P.E_L.MSO,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.MSO,
                     "V_th": P.V_TH.MSO,           
                     "t_ref": P.T_REF.MSO,         
@@ -157,7 +163,8 @@ class BrainstemModel(SpikingModel):
                 params={
                     "C_m": P.MEMB_CAPS.LSO,
                     "g_L": P.G_LEAK.LSO,
-                    "E_L": P.E_L.LSO,                                
+                    "E_L": P.E_L.LSO,
+                    "V_m": P.E_L.LSO,  # start at rest, not at the NEST default -70 mV
                     "V_reset": P.V_RESET.LSO,
                     "V_th": P.V_TH.LSO,           
                     "t_ref": P.T_REF.LSO,         
@@ -175,6 +182,27 @@ class BrainstemModel(SpikingModel):
             for pop in self.pops[side].keys():
                 self.recs[side][pop] = nest.Create("spike_recorder")
                 connect(self.pops[side][pop], self.recs[side][pop], "all_to_all")
+
+        # # ------------------------------------------------------
+        # id_neuron = 5133
+        # target_neuron = self.pops["L"]["LSO"][id_neuron]
+        # logger.debug(f"Target neuron global ID: {target_neuron.get('global_id')})")
+        # # assert target_neuron.get("global_id") == 164434
+
+        # self.multimeters["L"][f"LSO_{id_neuron}"] = nest.Create(
+        #     "multimeter",
+        #     params={
+        #         "record_from": ["V_m", "g_ex", "g_in"],
+        #         "interval": 0.1,
+        #     },
+        # )
+
+        # connect(
+        #     self.multimeters["L"][f"LSO_{id_neuron}"],
+        #     target_neuron,
+        #     "all_to_all",
+        # )
+             
 
         # real ANFs (generators) to parrots
         connect(self.pops["R"]["ANF"], self.pops["R"]["parrot_ANF"], "one_to_one", syn_spec={"delay": 0.01})
@@ -411,5 +439,8 @@ class BrainstemModel(SpikingModel):
                         **pop_data.get("events"),
                         "global_ids": self.pops[side][pop_name].get("global_id"),
                     }
+                    
+        if hasattr(self, "multimeters"):
+            result["L"]["LSO_multimeter"] = (self.multimeters["L"]["LSO_5133"].get("events"))
 
         return result

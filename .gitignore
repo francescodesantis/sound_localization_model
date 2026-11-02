@@ -53,3 +53,6 @@ reconstruction/models/avcn/morphology/dryad/VCN_c17_Full_MeshInflate.hoc
 reconstruction/models/avcn/morphology/dryad/VCN_c18_Full_MeshInflate.hoc
 reconstruction/models/avcn/morphology/dryad/VCN_c30_Full_MeshInflate.hoc
 reconstruction/ABR_reconstruction/plots/research_common.py
+reconstruction/models/avcn/arm64
+reconstruction/models/mntb/arm64
+reconstruction/models/mso/arm64
